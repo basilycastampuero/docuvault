@@ -182,7 +182,7 @@ pyenv local 3.13.0        # crea .python-version — pyenv lo lee automáticamen
 ## Paso 7: Crear repositorio en GitHub
 
 **Configuración del repo en GitHub.com:**
-- Nombre: `docuvault`
+- Nombre: `saasvault`
 - Descripción: `Enterprise document management SaaS platform built with Django, PostgreSQL, Redis and Celery`
 - Visibilidad: **Public** — los recruiters necesitan poder verlo
 - NO inicializar con README (se hace manualmente)
@@ -190,8 +190,8 @@ pyenv local 3.13.0        # crea .python-version — pyenv lo lee automáticamen
 ```bash
 mkdir -p ~/projects
 cd ~/projects
-git clone git@github.com:TU_USUARIO/docuvault.git
-cd docuvault
+git clone git@github.com:TU_USUARIO/saasvault.git
+cd saasvault
 pyenv local 3.13.0
 python --version           # debe mostrar 3.13.0
 ```
@@ -249,7 +249,7 @@ Dentro de cada app habrá esta estructura (se completa en la Fase 1):
 Cada proyecto tiene su propio entorno aislado. Las dependencias no se mezclan entre proyectos.
 
 ```bash
-cd ~/projects/docuvault
+cd ~/projects/saasvault
 python -m venv backend/.venv
 source backend/.venv/bin/activate
 # El prompt debe mostrar (.venv) cuando está activo
@@ -536,7 +536,7 @@ Flujo de trabajo Git:
 | Decisiones de arquitectura | `CLAUDE.md` |
 | Configuración de Git y SSH con GitHub | WSL2 local |
 | pyenv con Python 3.13 | WSL2 local |
-| Repositorio `docuvault` en GitHub | github.com/TU_USUARIO/docuvault |
+| Repositorio `saasvault` en GitHub | github.com/TU_USUARIO/saasvault |
 | Estructura de carpetas `backend/apps/` | Repo |
 | Entorno virtual `.venv` | `backend/.venv/` |
 | Dependencias instaladas | `backend/requirements.txt` |

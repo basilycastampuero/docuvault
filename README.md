@@ -43,7 +43,7 @@ search/            # PostgreSQL full-text search
 
 ```bash
 # Clone
-git clone git@github.com:basilycastampuero/docuvault.git
+git clone git@github.com:basilycastampuero/saasvault.git
 cd SasVault
 
 # Start infrastructure services

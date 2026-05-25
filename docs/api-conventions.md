@@ -10,7 +10,7 @@
 Toda URL pública de la API lleva el prefijo `/api/v1/`.
 
 ```
-https://docuvault.example.com/api/v1/documents/
+https://saasvault.example.com/api/v1/documents/
 ```
 
 Cuando haya cambios breaking, se creará `/api/v2/` manteniendo v1 activa por un período de deprecación.

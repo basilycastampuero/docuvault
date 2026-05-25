@@ -179,7 +179,7 @@ El README es la portada del proyecto. Debe incluir:
 ![Python](https://img.shields.io/badge/Python-3.13-blue)
 ![Django](https://img.shields.io/badge/Django-5.1-green)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-blue)
-![Tests](https://github.com/user/docuvault/actions/workflows/ci.yml/badge.svg)
+![Tests](https://github.com/user/saasvault/actions/workflows/ci.yml/badge.svg)
 ![Coverage](https://img.shields.io/badge/coverage-85%25-brightgreen)
 ```
 

@@ -2,25 +2,25 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    container_name: docuvault_postgres
+    container_name: saasvault_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: docuvault_db
-      POSTGRES_USER: docuvault_user
-      POSTGRES_PASSWORD: docuvault_pass_local
+      POSTGRES_DB: saasvault_db
+      POSTGRES_USER: saasvault_user
+      POSTGRES_PASSWORD: saasvault_pass_local
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U docuvault_user -d docuvault_db"]
+      test: ["CMD-SHELL", "pg_isready -U saasvault_user -d saasvault_db"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   redis:
     image: redis:7-alpine
-    container_name: docuvault_redis
+    container_name: saasvault_redis
     restart: unless-stopped
     ports:
       - "6379:6379"
@@ -34,7 +34,7 @@ services:
 
   minio:
     image: minio/minio:latest
-    container_name: docuvault_minio
+    container_name: saasvault_minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
