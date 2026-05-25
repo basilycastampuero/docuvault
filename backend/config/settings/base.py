@@ -35,7 +35,7 @@ THIRD_PARTY_APPS = [
 
 LOCAL_APPS: list[str] = [
     # Apps are added here as each phase is built:
-    # "apps.core",
+    "apps.core",
     # "apps.organizations",
     # "apps.authentication",
     # "apps.permissions",
@@ -152,8 +152,7 @@ REST_FRAMEWORK = {
         "rest_framework.filters.SearchFilter",
         "rest_framework.filters.OrderingFilter",
     ],
-    # Uncomment after Phase 1.2 (core app with custom exception handler):
-    # "EXCEPTION_HANDLER": "apps.core.exceptions.custom_exception_handler",
+    "EXCEPTION_HANDLER": "apps.core.exceptions.custom_exception_handler",
 }
 
 # ---------------------------------------------------------------------------
