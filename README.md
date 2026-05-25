@@ -44,7 +44,7 @@ search/            # PostgreSQL full-text search
 ```bash
 # Clone
 git clone git@github.com:basilycastampuero/docuvault.git
-cd docuvault
+cd SasVault
 
 # Start infrastructure services
 docker compose up -d
