@@ -43,10 +43,22 @@ class TestListUsers:
         org_ids = {u["organization_id"] for u in response.data["data"]}
         assert all(str(oid) == str(org_admin.organization_id) for oid in org_ids)
 
-    def test_response_contains_meta_count(self, api_client, org_admin):
+    def test_response_contains_full_pagination_meta(self, api_client, org_admin):
         login(api_client, org_admin)
         response = api_client.get(self.url)
-        assert "count" in response.data["meta"]
+        meta = response.data["meta"]
+        for key in ("count", "page", "page_size", "total_pages", "next", "previous"):
+            assert key in meta
+
+    def test_page_size_query_param_is_honored(
+        self, api_client, org_admin, organization
+    ):
+        for _ in range(5):
+            UserFactory(organization=organization)
+        login(api_client, org_admin)
+        response = api_client.get(f"{self.url}?page_size=2")
+        assert len(response.data["data"]) == 2
+        assert response.data["meta"]["page_size"] == 2
 
 
 @pytest.mark.django_db
