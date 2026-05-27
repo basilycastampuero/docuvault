@@ -1,7 +1,8 @@
-# docs/database-conventions.md — Convenciones de Base de Datos DocuVault
+# docs/database-conventions.md — Convenciones de Base de Datos SasVault
 
 > Referencia de diseño de base de datos para el proyecto.
-> Seguir estas convenciones garantiza consistencia y performance.
+> La fuente autoritativa es **CLAUDE.md §6**. Este documento expande con esquemas SQL
+> de referencia y patrones avanzados (FTS, JSONB, performance).
 
 ---
 
@@ -29,24 +30,24 @@ Campos automáticos en todo modelo:
 
 ### Tablas
 - snake_case, plural
-- Prefijo de app cuando hay ambigüedad
+- **Siempre `db_table` explícito en `Meta`** (no depender del label de la app)
+- Sin prefijo de app: el dominio ya está claro por el nombre del recurso
 
 ```
-organizations_organization
-auth_user
-documents_document
-documents_document_version
-documents_folder
-workflows_workflow_template
-workflows_workflow_step
-workflows_workflow_execution
-audit_audit_log
+organizations
+users
+folders
+documents
+document_versions
+workflow_templates
+workflow_steps
+workflow_executions
+audit_logs
 ```
 
-Django genera el nombre automáticamente como `{app_label}_{model_name}`. Especificar explícitamente en Meta cuando sea necesario:
 ```python
 class Meta:
-    db_table = 'documents_document'
+    db_table = "documents"
 ```
 
 ### Campos
@@ -66,61 +67,64 @@ idx_{tabla}_{campo}_gin       ← para índices GIN
 
 ## 4. Esquema de tablas principales
 
-### organizations_organization
+### organizations
 ```sql
 id              UUID PRIMARY KEY DEFAULT gen_random_uuid()
 name            VARCHAR(255) NOT NULL
-slug            VARCHAR(255) NOT NULL UNIQUE
+slug            VARCHAR(100) NOT NULL UNIQUE
 is_active       BOOLEAN NOT NULL DEFAULT TRUE
 settings        JSONB NOT NULL DEFAULT '{}'
 created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 deleted_at      TIMESTAMPTZ
 
-INDEX: idx_organization_slug ON (slug)
-INDEX: idx_organization_active ON (is_active) WHERE is_active = TRUE
+INDEX: idx_organizations_slug ON (slug)
+INDEX: idx_organizations_is_active ON (is_active)
 ```
 
-### auth_user (Custom User)
+### users (Custom User extending AbstractBaseUser)
 ```sql
 id              UUID PRIMARY KEY
 email           VARCHAR(254) NOT NULL UNIQUE
 password        VARCHAR(128) NOT NULL
-organization_id UUID NOT NULL REFERENCES organizations_organization(id)
-role            VARCHAR(20) NOT NULL  -- super_admin, org_admin, etc.
+first_name      VARCHAR(150) NOT NULL DEFAULT ''
+last_name       VARCHAR(150) NOT NULL DEFAULT ''
+organization_id UUID REFERENCES organizations(id) ON DELETE SET NULL  -- nullable: SUPER_ADMIN has no tenant
+role            VARCHAR(20) NOT NULL  -- super_admin, org_admin, supervisor, editor, viewer, auditor
 is_active       BOOLEAN NOT NULL DEFAULT TRUE
-last_login_at   TIMESTAMPTZ
+is_staff        BOOLEAN NOT NULL DEFAULT FALSE
+last_login      TIMESTAMPTZ  -- inherited from AbstractBaseUser
 created_at      TIMESTAMPTZ NOT NULL
 updated_at      TIMESTAMPTZ NOT NULL
 deleted_at      TIMESTAMPTZ
 
-INDEX: idx_user_organization ON (organization_id)
-INDEX: idx_user_email ON (email)
-INDEX: idx_user_org_role ON (organization_id, role)
+INDEX: idx_users_email ON (email)
+INDEX: idx_users_org_role ON (organization_id, role)
+INDEX: idx_users_org_active ON (organization_id, is_active)
 ```
 
-### documents_folder
+### folders
 ```sql
 id              UUID PRIMARY KEY
-organization_id UUID NOT NULL REFERENCES organizations_organization(id)
-parent_id       UUID REFERENCES documents_folder(id)  -- null = carpeta raíz
+organization_id UUID NOT NULL REFERENCES organizations(id)
+parent_id       UUID REFERENCES folders(id)  -- null = carpeta raíz
 name            VARCHAR(255) NOT NULL
-owner_id        UUID NOT NULL REFERENCES auth_user(id)
+owner_id        UUID NOT NULL REFERENCES users(id)
 created_at      TIMESTAMPTZ NOT NULL
 updated_at      TIMESTAMPTZ NOT NULL
 deleted_at      TIMESTAMPTZ
 
-INDEX: idx_folder_org_parent ON (organization_id, parent_id)
-UNIQUE: uq_folder_name_parent ON (organization_id, parent_id, name)
+INDEX: idx_folders_org_parent ON (organization_id, parent_id)
+UNIQUE: uq_folders_org_parent_name_alive ON (organization_id, parent_id, name)
         WHERE deleted_at IS NULL
 ```
 
-### documents_document
+### documents
 ```sql
 id              UUID PRIMARY KEY
-organization_id UUID NOT NULL REFERENCES organizations_organization(id)
-folder_id       UUID REFERENCES documents_folder(id)
-created_by_id   UUID NOT NULL REFERENCES auth_user(id)
+organization_id UUID NOT NULL REFERENCES organizations(id)
+folder_id       UUID REFERENCES folders(id)
+created_by_id   UUID NOT NULL REFERENCES users(id)
 name            VARCHAR(255) NOT NULL
 description     TEXT NOT NULL DEFAULT ''
 mime_type       VARCHAR(127) NOT NULL
@@ -144,27 +148,27 @@ INDEX: idx_documents_search_vector_gin ON (search_vector) USING GIN
 INDEX: idx_documents_tags_gin ON (tags) USING GIN
 ```
 
-### documents_document_version
+### document_versions
 ```sql
 id              UUID PRIMARY KEY
-document_id     UUID NOT NULL REFERENCES documents_document(id)
+document_id     UUID NOT NULL REFERENCES documents(id)
 version_number  INTEGER NOT NULL
 storage_path    VARCHAR(1024) NOT NULL
 file_size       BIGINT NOT NULL
 checksum        VARCHAR(64) NOT NULL
-created_by_id   UUID NOT NULL REFERENCES auth_user(id)
+created_by_id   UUID NOT NULL REFERENCES users(id)
 change_description TEXT NOT NULL DEFAULT ''
 created_at      TIMESTAMPTZ NOT NULL
 
-UNIQUE: uq_document_version ON (document_id, version_number)
-INDEX: idx_doc_version_document ON (document_id)
+UNIQUE: uq_document_versions_doc_number ON (document_id, version_number)
+INDEX: idx_document_versions_document ON (document_id)
 ```
 
-### audit_audit_log
+### audit_logs
 ```sql
 id              BIGSERIAL PRIMARY KEY  -- no UUID: performance en tabla de alta escritura
-organization_id UUID NOT NULL REFERENCES organizations_organization(id)
-user_id         UUID REFERENCES auth_user(id)  -- null si es acción del sistema
+organization_id UUID NOT NULL REFERENCES organizations(id)
+user_id         UUID REFERENCES users(id)  -- null si es acción del sistema
 entity_type     VARCHAR(50) NOT NULL  -- 'document', 'folder', 'user', etc.
 entity_id       VARCHAR(36) NOT NULL  -- UUID del recurso afectado
 action          VARCHAR(30) NOT NULL  -- 'create', 'update', 'delete', 'view', 'login'
@@ -176,9 +180,9 @@ metadata        JSONB NOT NULL DEFAULT '{}'
 created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 
 -- Sin updated_at ni deleted_at: los logs son inmutables
-INDEX: idx_audit_org_created ON (organization_id, created_at DESC)
-INDEX: idx_audit_org_entity ON (organization_id, entity_type, entity_id)
-INDEX: idx_audit_user ON (user_id)
+INDEX: idx_audit_logs_org_created ON (organization_id, created_at DESC)
+INDEX: idx_audit_logs_org_entity ON (organization_id, entity_type, entity_id)
+INDEX: idx_audit_logs_user ON (user_id)
 ```
 
 ---

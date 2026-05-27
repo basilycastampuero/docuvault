@@ -1,5 +1,4 @@
-
-# DocuVault
+# SasVault
 
 Enterprise document management SaaS platform with multi-tenancy, role-based access control, automated workflows, and full-text search.
 
@@ -14,20 +13,25 @@ Enterprise document management SaaS platform with multi-tenancy, role-based acce
 
 Modular monolith with domain-driven structure, designed for future service extraction.
 
+```
 backend/
-apps/
-authentication/    # JWT auth, token management
-organizations/     # Multi-tenancy, tenant isolation
-documents/         # File management, versioning, OCR
-workflows/         # State machines, approval flows
-permissions/       # RBAC, granular permissions
-audit/             # Immutable audit log
-notifications/     # Event-driven notifications
-search/            # PostgreSQL full-text search
+  apps/
+    authentication/   # Custom User, JWT auth, token management
+    organizations/    # Multi-tenancy, tenant isolation
+    permissions/      # RBAC, granular permissions
+    documents/        # File management, versioning, OCR
+    workflows/        # State machines, approval flows
+    audit/            # Immutable audit log
+    notifications/    # Event-driven notifications
+    search/           # PostgreSQL full-text search
+    core/             # BaseModel, exceptions, pagination
+```
+
 ## Key Features
 
-- **Multi-tenancy** — complete organization isolation via shared schema
-- **RBAC** — role-based access control with granular permissions per resource
+- **Multi-tenancy** — complete organization isolation via shared schema with `organization_id` on every domain table
+- **RBAC** — six-role system (super_admin, org_admin, supervisor, editor, viewer, auditor) with permission classes per endpoint
+- **JWT auth** — rotating refresh tokens with blacklist, custom claims (organization_id, role, email)
 - **Document versioning** — immutable version history, no file overwrites
 - **Audit logging** — who, what, when, from where, old/new values
 - **Async processing** — OCR, thumbnails, exports via Celery
@@ -43,7 +47,7 @@ search/            # PostgreSQL full-text search
 
 ```bash
 # Clone
-git clone git@github.com:basilycastampuero/saasvault.git
+git clone git@github.com:<your-user>/SasVault.git
 cd SasVault
 
 # Start infrastructure services
@@ -77,7 +81,8 @@ flake8
 
 ## Status
 
-🚧 Active development — Phase 1 (Auth + Organizations + RBAC)
+Active development — Phase 1 (Auth + Organizations + RBAC + User management) complete.
+166 tests passing, 99% coverage.
 
 ---
 

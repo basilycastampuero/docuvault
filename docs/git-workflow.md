@@ -1,4 +1,4 @@
-# docs/git-workflow.md — Git Workflow DocuVault
+# docs/git-workflow.md — Git Workflow SasVault
 
 > Convenciones de Git para el proyecto.
 > Un historial limpio y legible es parte del portafolio.
@@ -62,12 +62,17 @@ git branch -d feature/document-upload
 Formato obligatorio para todos los commits:
 
 ```
-<type>(<scope>): <descripción en imperativo, minúscula, sin punto final>
+<type>(<scope>)?: <descripción en imperativo, minúscula, sin punto final>
 
 [body opcional — explica el POR QUÉ, no el qué]
 
 [footer opcional — referencias a issues, breaking changes]
 ```
+
+El **scope es recomendado pero opcional**:
+- Úsalo cuando el cambio toca un solo dominio: `feat(auth): ...`, `fix(documents): ...`
+- Omítelo cuando el cambio abarca múltiples dominios (fases completas, refactors transversales)
+  o cuando el dominio ya es claro por la descripción: `feat: implement authentication app (Phase 1.4)`
 
 ### Tipos permitidos
 
