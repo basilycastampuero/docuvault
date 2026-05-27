@@ -38,7 +38,7 @@ LOCAL_APPS: list[str] = [
     "apps.core",
     "apps.organizations",
     "apps.authentication",
-    # "apps.permissions",
+    "apps.permissions",
     # "apps.documents",
     # "apps.audit",
     # "apps.workflows",
