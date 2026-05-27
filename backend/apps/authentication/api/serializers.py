@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from apps.authentication.models import User
+from apps.authentication.models import User, UserRole
 
 
 class LoginSerializer(serializers.Serializer):
@@ -30,3 +30,31 @@ class UserSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = fields
+
+
+class UserCreateSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    role = serializers.ChoiceField(choices=UserRole.choices)
+    first_name = serializers.CharField(max_length=150, required=False, default="")
+    last_name = serializers.CharField(max_length=150, required=False, default="")
+    password = serializers.CharField(write_only=True, required=False)
+
+    def validate_role(self, value: str) -> str:
+        if value == UserRole.SUPER_ADMIN:
+            raise serializers.ValidationError(
+                "Cannot assign SUPER_ADMIN role through this endpoint."
+            )
+        return value
+
+
+class UserUpdateSerializer(serializers.Serializer):
+    first_name = serializers.CharField(max_length=150, required=False)
+    last_name = serializers.CharField(max_length=150, required=False)
+    role = serializers.ChoiceField(choices=UserRole.choices, required=False)
+
+    def validate_role(self, value: str) -> str:
+        if value == UserRole.SUPER_ADMIN:
+            raise serializers.ValidationError(
+                "Cannot assign SUPER_ADMIN role through this endpoint."
+            )
+        return value
