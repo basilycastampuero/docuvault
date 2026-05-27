@@ -159,36 +159,194 @@ document.delete()
 
 ## 6. Convenciones de base de datos
 
-### Nombrado
-- Tablas: snake_case plural (`documents`, `audit_logs`, `workflow_steps`)
-- Campos FK: `{modelo}_id` o `{modelo}` con nombre descriptivo
-- Índices: `idx_{tabla}_{campo(s)}`
+### Motor y estrategia de multi-tenancy
 
-### Índices obligatorios
-Siempre agregar índice en:
-- `organization_id` en toda tabla con FK a Organization
-- Campos usados frecuentemente en `filter()` o `order_by()`
-- Campos usados en búsqueda (GIN para full-text)
+- **Motor:** PostgreSQL 16 — único soportado. Aprovechar features nativas: JSONB, full-text search, GIN/BRIN, arrays, CTEs, window functions. NO usar SQLite ni MySQL para ningún propósito real. Los tests también corren contra PostgreSQL real (DB `test_saasvault_db`), no SQLite en memoria.
+- **Multi-tenancy:** schema único compartido. TODAS las organizaciones viven en las mismas tablas. El aislamiento se garantiza por `organization_id` en cada tabla de dominio y en cada query. NO usar schemas PostgreSQL separados por tenant. NO usar bases de datos separadas por tenant. Decisión permanente para esta etapa.
+- **Implicación crítica:** una query mal escrita (sin filtro por organization) filtra datos entre tenants — vulnerabilidad de seguridad grave en SaaS empresarial. Los selectors SIEMPRE reciben `organization` como parámetro explícito y filtran por él en su query base. El middleware inyecta `request.organization` en cada request autenticado.
+
+### Categorías de tablas
+
+| Categoría | FK a Organization | Ejemplos |
+|-----------|-------------------|----------|
+| Django/Framework (no tocar) | — | `django_*`, `token_blacklist_*` |
+| Raíz del tenant | NO (ella ES el tenant) | `organizations` |
+| Dominio del negocio | **SÍ, obligatoria** | `documents`, `folders`, `workflows`, `audit_logs`, todo lo demás |
+
+Toda tabla nueva del proyecto cae en "Dominio del negocio" salvo justificación documentada. La FK a `organizations` es no-nullable salvo casos extremos (logs de sistema sin user, eventos pre-autenticación).
+
+### Nombrado
+
+- **Tablas:** snake_case plural. Configurar SIEMPRE `db_table` explícito en `Meta` para no depender del label de la app:
+  ```python
+  class Meta:
+      db_table = "documents"
+  ```
+- **Campos FK en Python:** nombre semántico del modelo en singular (`organization`, `folder`, `created_by`, `assigned_to`, `reviewed_by`). NO `organization_id` en el código — Django agrega el `_id` solo en la columna real.
+- **Para FK a User:** preferir nombres por rol (`created_by`, `uploaded_by`, `approved_by`) sobre el genérico `user`.
+- **Índices:** `idx_{tabla}_{campo1}[_{campo2}...]`. Para índices parciales agregar sufijo describiendo la condición: `idx_documents_org_status_alive` (filtra `deleted_at IS NULL`).
+- **Constraints:** `uq_{tabla}_{campos}` para uniques compuestos, `chk_{tabla}_{regla}` para CHECK constraints.
+
+### Estrategia de índices — obligatoria
+
+**Reglas absolutas:**
+
+1. Toda FK a `Organization` lleva índice — es el campo más usado en cada query del sistema.
+2. Toda combinación de campos usada en `filter()` o `order_by()` lleva un **índice compuesto**, no índices separados por columna. PostgreSQL no combina índices separados de forma eficiente en tablas grandes.
+3. El **orden de los campos** en el índice compuesto importa: primero el más selectivo y constante en la query (típicamente `organization`), después el que varía. Un índice `(organization, status)` sirve para queries que filtran por organization sola o por ambos; pero NO sirve para filtrar solo por status.
+4. Verificar con `EXPLAIN ANALYZE` que el índice se está usando. Un índice que existe pero no se usa solo agrega costo en writes y espacio en disco.
+5. NO agregar índices "por si acaso". Cada índice cuesta en cada INSERT/UPDATE.
 
 ```python
 class Meta:
+    db_table = "documents"
     indexes = [
-        models.Index(fields=['organization', 'status'], name='idx_documents_org_status'),
-        models.Index(fields=['organization', 'created_at'], name='idx_documents_org_created'),
+        # Listado por estado dentro de una organización
+        models.Index(fields=["organization", "status"], name="idx_documents_org_status"),
+        # Listado cronológico dentro de una organización (DESC porque queremos los recientes primero)
+        models.Index(fields=["organization", "-created_at"], name="idx_documents_org_created"),
+        # Detección de duplicados por hash dentro de una org
+        models.Index(fields=["organization", "checksum"], name="idx_documents_org_checksum"),
+        # Full-text search (requiere django.contrib.postgres)
+        GinIndex(fields=["search_vector"], name="idx_documents_search_vector"),
     ]
 ```
 
-### Campos JSONB
-Usar para: metadata flexible, configuración dinámica, valores old/new en auditoría.
+**Índice parcial para soft delete (tablas grandes):**
+Cuando una tabla supera los ~100k filas y un porcentaje significativo está soft-deleted, un índice parcial mejora drásticamente las queries normales:
 
 ```python
-metadata = models.JSONField(default=dict, blank=True)
+from django.db.models import Q
+
+models.Index(
+    fields=["organization", "status"],
+    name="idx_documents_org_status_alive",
+    condition=Q(deleted_at__isnull=True),
+)
 ```
 
+### Prevención de N+1 — OBLIGATORIO en selectors
+
+Cualquier selector que devuelva un queryset que se serializa en lista debe declarar explícitamente sus relaciones con `select_related` y `prefetch_related`. Sin esto, una respuesta de 50 documentos puede generar 150+ queries.
+
+```python
+# ❌ INCORRECTO — N+1 al serializar
+def get_documents(organization):
+    return Document.objects.filter(organization=organization)
+
+# ✅ CORRECTO
+def get_documents(organization):
+    return (
+        Document.objects
+        .filter(organization=organization)
+        .select_related("folder", "created_by")     # FK / OneToOne → JOIN
+        .prefetch_related("tags", "versions")        # reverse FK / M2M → query extra agrupada
+    )
+```
+
+| Tipo de relación | Método |
+|------------------|--------|
+| ForeignKey, OneToOne (hacia adelante) | `select_related` |
+| Reverse ForeignKey, ManyToMany | `prefetch_related` |
+
+### Soft delete — implicaciones para queries
+
+`BaseModel.objects` ya filtra `deleted_at IS NULL` automáticamente. NO repetir el filtro en cada selector.
+
+- Para acceder a registros eliminados (admin, auditoría): `Model.all_objects`.
+- Para uniques que respeten soft delete: usar `UniqueConstraint` con `condition=Q(deleted_at__isnull=True)` en vez de `unique=True`. Esto permite reusar un slug/email después de eliminar el registro original.
+
+```python
+class Meta:
+    constraints = [
+        models.UniqueConstraint(
+            fields=["organization", "slug"],
+            condition=Q(deleted_at__isnull=True),
+            name="uq_documents_org_slug_alive",
+        )
+    ]
+```
+
+### JSONB
+
+**Usar JSONB para:**
+- Configuración dinámica por tenant (`Organization.settings`)
+- Metadata flexible que varía por instancia (`Document.metadata`, `AuditLog.metadata`)
+- Snapshots de valores en auditoría (`AuditLog.old_values`, `new_values`)
+- Resultados estructurados de procesamiento async (análisis IA, OCR enriquecido)
+
+**NO usar JSONB para:**
+- Datos que se filtran u ordenan en queries frecuentes → columna real con índice
+- Relaciones (FKs) → tablas y FKs reales, siempre
+- Listas que pueden crecer indefinidamente (historial, comments) → tabla aparte
+- Datos sensibles que deben auditarse columna por columna
+
+```python
+metadata = models.JSONField(default=dict, blank=True)  # SIEMPRE default=dict, nunca None
+```
+
+**Indexar JSONB cuando se consulta frecuentemente:**
+
+```python
+from django.contrib.postgres.indexes import GinIndex
+
+class Meta:
+    indexes = [
+        GinIndex(
+            fields=["metadata"],
+            name="idx_documents_metadata_gin",
+            opclasses=["jsonb_path_ops"],  # más rápido que jsonb_ops para queries de contención
+        ),
+    ]
+```
+
+### Transacciones
+
+Todo service que modifica más de una tabla DEBE envolver las operaciones en `transaction.atomic()`. La regla: si la operación falla a la mitad, la BD queda como antes de empezar.
+
+```python
+from django.db import transaction
+
+def create_document(organization, user, file, **data) -> Document:
+    with transaction.atomic():
+        document = Document.objects.create(organization=organization, ...)
+        DocumentVersion.objects.create(document=document, version_number=1, ...)
+        audit_service.log(organization, user, document, AuditAction.CREATE, ...)
+    return document
+```
+
+**Reglas:**
+- NO envolver lecturas en transacciones — innecesario.
+- NO usar `commit`/`rollback` manuales — siempre el context manager.
+- Las tareas Celery que disparan side-effects (notificaciones, llamadas externas) van DESPUÉS del `commit`, no dentro de la transacción. Usar `transaction.on_commit(lambda: task.delay(...))`.
+
 ### Migraciones
-- Siempre revisar la migración generada antes de aplicar
-- Nunca modificar migraciones ya aplicadas
-- Nombrar migraciones descriptivamente cuando sea posible
+
+- **Revisar SIEMPRE** la migración generada antes de aplicarla (`makemigrations` produce, `migrate` aplica). Verificar índices, defaults, on_delete, constraints.
+- **NUNCA** modificar migraciones ya aplicadas en cualquier entorno. Si hay un error, crear una migración correctiva nueva.
+- **Nombrar descriptivamente:** `python manage.py makemigrations --name add_document_search_vector` produce `0042_add_document_search_vector.py`, mucho mejor que `0042_auto_20260526_1830.py`.
+- **Zero-downtime en producción:** evitar operaciones que bloquean tablas grandes. Para columnas nuevas NOT NULL en tablas grandes, seguir el patrón de 3 migraciones:
+  1. Agregar columna como nullable
+  2. Backfill async (data migration o tarea Celery)
+  3. Cambiar a NOT NULL
+- **Data migrations:** todo `RunPython` con `reverse_code`. Si genuinamente no es reversible, usar `migrations.RunPython.noop` y comentar por qué.
+
+### Conexiones y performance
+
+- `CONN_MAX_AGE = 60` reutiliza conexiones entre requests por 60s — evita overhead de TCP+auth en cada request. NO subirlo arbitrariamente: PostgreSQL tiene límite de conexiones (default 100), y con N workers × M conexiones persistentes se agota rápido.
+- En producción, usar **PgBouncer** como pool externo si hay muchos workers/celery beat.
+- **Objetivo de performance:** queries de listado paginado < 50ms con el dataset esperado. Profilear con `EXPLAIN ANALYZE` cualquier query del critical path antes de mergear.
+
+### Checklist obligatorio antes de mergear una feature con DB
+
+- [ ] Todo modelo nuevo hereda de `BaseModel` y tiene FK a `Organization` (excepto raíz)
+- [ ] Todo selector recibe `organization` como parámetro explícito y filtra por él
+- [ ] Hay índice en `organization_id` o compuesto que lo incluya como primer campo
+- [ ] Los selectors que devuelven listas declaran `select_related`/`prefetch_related`
+- [ ] Test explícito de aislamiento: crear dos orgs, verificar que org A no ve datos de org B
+- [ ] Services que tocan múltiples tablas usan `transaction.atomic()`
+- [ ] La migración fue revisada manualmente, no solo generada
+- [ ] Para queries críticas: salida de `EXPLAIN ANALYZE` muestra uso de índice
 
 ---
 
