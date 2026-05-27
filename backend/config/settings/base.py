@@ -37,7 +37,7 @@ LOCAL_APPS: list[str] = [
     # Apps are added here as each phase is built:
     "apps.core",
     "apps.organizations",
-    # "apps.authentication",
+    "apps.authentication",
     # "apps.permissions",
     # "apps.documents",
     # "apps.audit",
@@ -62,8 +62,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
-    # Uncomment after Phase 1.4 (authentication app):
-    # "apps.authentication.middleware.OrganizationTenantMiddleware",
+    "apps.authentication.middleware.OrganizationTenantMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -122,8 +121,7 @@ CACHES = {
 # Auth
 # ---------------------------------------------------------------------------
 
-# Uncomment after Phase 1.4 (authentication app is created and migrated):
-# AUTH_USER_MODEL = "authentication.User"
+AUTH_USER_MODEL = "authentication.User"
 
 AUTH_PASSWORD_VALIDATORS = [
     {
