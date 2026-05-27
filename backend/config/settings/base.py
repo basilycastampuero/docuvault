@@ -36,7 +36,7 @@ THIRD_PARTY_APPS = [
 LOCAL_APPS: list[str] = [
     # Apps are added here as each phase is built:
     "apps.core",
-    # "apps.organizations",
+    "apps.organizations",
     # "apps.authentication",
     # "apps.permissions",
     # "apps.documents",
