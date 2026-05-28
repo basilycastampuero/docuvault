@@ -1,13 +1,13 @@
-# DocuVault — Bitácora de Preparación del Proyecto
-## Autodocumentación completa: todo lo hecho antes de escribir código
+# SasVault — Bitácora de Preparación del Proyecto
+## Autodocumentación completa: todo lo hecho, por qué se hizo, y el estado actual
 
-> Este documento es tu referencia personal. Explica qué se hizo, por qué se hizo,
-> y en qué orden. Léelo cada vez que necesites reorientarte.
-> Última actualización: Fase 0 — Pre-desarrollo completada.
+> Este documento es tu referencia personal. Explica qué se hizo, por qué, en qué orden,
+> y dónde estamos ahora. Léelo cada vez que necesites reorientarte.
+> Última actualización: Fase 1 completa (1.1–1.6), Fase 2 plan cerrado, listo para empezar.
 
 ---
 
-## ¿Qué es DocuVault?
+## ¿Qué es SasVault?
 
 Una plataforma SaaS empresarial de gestión documental y automatización de workflows. Múltiples empresas pueden usar el sistema de forma completamente aislada (multi-tenant). Cada empresa gestiona sus usuarios, documentos, carpetas, permisos, workflows y auditoría.
 
@@ -554,27 +554,190 @@ Flujo de trabajo Git:
 | Convenciones de base de datos | `docs/database-conventions.md` |
 | Flujo de trabajo Git | `docs/git-workflow.md` |
 
-## 🔜 Próximo paso: Fase 1
+---
 
-La primera tarea de código real es inicializar Django correctamente:
+# PARTE 4 — Desarrollo: Fase 1 completada y Fase 2 planificada
+
+## Sesión de desarrollo: Phase 1 (1.1–1.6) y correcciones
+
+### Recapitulación de Phase 1 — Autenticación + Organizaciones + RBAC
+
+**Fase 1.1 — Django base + settings en 4 capas**
+- Settings en `base.py` (común), `development.py`, `test.py` (PostgreSQL real), `production.py`
+- Configuración de PostgreSQL via python-decouple (variables de entorno)
+- Django REST Framework + simplejwt + drf-spectacular integrados
+- Configuración de logging estructurado (JSON)
+
+**Fase 1.2 — Core app: BaseModel y utilidades**
+- `BaseModel` con UUID pk, `created_at`, `updated_at`, `deleted_at` (con `db_index=True` — crítico para soft delete)
+- `SoftDeleteManager` que filtra automáticamente `deleted_at IS NULL`
+- `AllObjectsManager` para acceder a registros eliminados (admin, auditoría)
+- `ApplicationError` hierarchy (`PermissionDenied`, `NotFound`, `ValidationError` con `details`, `ConflictError`)
+- Custom exception handler que transforma todo a envelope `{"error": {"code", "message", "details"}}`
+- `StandardPagination` que retorna `{"data": [...], "meta": {count, page, page_size, total_pages, next, previous}}`
+
+**Fase 1.3 — Organizations app**
+- Modelo `Organization` con `name`, `slug` (unique), `is_active`, `settings` (JSONB)
+- `OrganizationService` (create, update, deactivate)
+- `OrganizationSelector` (get_by_id, get_by_slug)
+- `OrganizationViewSet` (solo SUPER_ADMIN puede crear orgs)
+- Tests: aislamiento de tenant, permisos
+
+**Fase 1.4 — Authentication app: Custom User + JWT**
+- `UserRole` TextChoices: `super_admin`, `org_admin`, `supervisor`, `editor`, `viewer`, `auditor`
+- `User` model (hereda `AbstractBaseUser`, no `AbstractUser`)
+  - `organization` FK nullable (SUPER_ADMIN no pertenece a org)
+  - `role` campo con choices
+  - Custom `UserManager` que extiende `BaseUserManager` + filtra soft-deleted
+  - `AllUsersManager` para admin
+- JWT con claims personalizados: `organization_id`, `role`, `email` en ambos refresh y access tokens
+- Token blacklist en logout (via `simplejwt.token_blacklist`)
+- Rotating refresh tokens
+- `OrganizationTenantMiddleware`: inyecta `request.organization` en cada request autenticado (decodifica Bearer token, extrae org_id, fetchea Organization)
+- Endpoints: `/api/v1/auth/login/`, `/api/v1/auth/refresh/`, `/api/v1/auth/logout/`, `/api/v1/auth/me/`
+- Services: `auth_service.login()` (verificación manual en 3 pasos para diferenciar "credenciales incorrectas" de "cuenta desactivada"), `logout()`, `refresh_token_pair()`
+- User management endpoints: listar usuarios de org, crear, actualizar, desactivar (soft delete = `is_active=False`, no `deleted_at`)
+
+**Fase 1.5 — Permissions app: RBAC**
+- `IsOrganizationMember`: verifica `request.user.organization == request.organization`
+- `HasRole(*roles)`: class factory que retorna una clase (permite `permission_classes = [HasRole(EDITOR, ORG_ADMIN)]`)
+- Aliases: `IsOrgAdmin`, `IsSuperAdmin`
+- Tests: cada combinación de usuario/rol/org
+
+**Fase 1.6 — User management endpoints**
+- `UserListCreateView` (GET: listar usuarios de la org, POST: crear usuario — requiere OrgAdmin)
+- `UserDetailView` (GET: detalle, PATCH: actualizar, DELETE: desactivar — requiere OrgAdmin)
+- `UserSelector` con tenant isolation
+- Serializers separados para lectura vs escritura
+
+**Tests y Coverage:** 167 tests pasando, 99% cobertura.
+
+**drf-spectacular:** Schema con 0 errores, 0 warnings. Endpoints Swagger en `/api/docs/`, Redoc en `/api/redoc/`.
+
+### Correcciones identificadas y aplicadas
+
+Después de completar Phase 1, se revisaron todos los archivos `.md` para alineación con el código real. Se encontraron y corrigieron 6 desajustes:
+
+**1. `db_index=True` en `BaseModel.deleted_at`** (commit: `54b0319`)
+- CLAUDE.md §6 lo documentaba pero el modelo no lo tenía
+- Se añadió al campo; se generaron migraciones en `authentication` y `organizations`
+- Impacto: queries de soft delete (`WHERE deleted_at IS NULL`) usan índice en lugar de full table scan
+
+**2. `StandardPagination` con formato meta completo** (commit: `2e5184f`)
+- CLAUDE.md §7 especificaba formato pero la paginación no estaba implementada
+- Se creó `apps/core/pagination.py` con envelope `{data: [...], meta: {count, page, page_size, total_pages, next, previous}}`
+- Impacto: todos los endpoints de lista retornan el envelope consistente
+
+**3. `drf-spectacular` instalado y configurado** (commit: `2e5184f`)
+- `base.py` referenciaba schema pero paquete no estaba en `requirements.txt`, views sin decoradores
+- Se instaló `drf-spectacular==0.27.2`, se añadieron endpoints `/api/schema/`, `/api/docs/`, `/api/redoc/`
+- Se decoraron todas las views con `@extend_schema`
+- Impacto: documentación automática e interactiva de API en Swagger/Redoc
+
+**4. `README.md` actualizado** (commit: `e6db851`)
+- Nombre "DocuVault" → "SasVault", arquitectura desactualizada, faltaban features
+- Se reescribió con apps actuales, custom JWT claims, 6 roles RBAC, estado Phase 1 complete
+
+**5. `docs/database-conventions.md` corregido** (commit: `e6db851`)
+- Nombres de tablas erróneos (`organizations_organization` → `organizations`, `auth_user` → `users`)
+- Schema del User desactualizado (faltaban `role`, `organization_id`)
+- Se corrigió todo; se marcó CLAUDE.md §6 como fuente autoritativa
+
+**6. `docs/git-workflow.md` actualizado** (commit: `e6db851`)
+- Nombre "DocuVault" → "SasVault"
+- Scope en commits de obligatorio a recomendado-pero-opcional (para commits transversales como "feat: implement authentication app (Phase 1.4)")
+
+### Correcciones adicionales en esta sesión (commits: `dae4199`, `d373fe4`)
+
+**Security fix:** `backend/.env` estaba trackeado en git desde el commit inicial (con placeholders genéricos). Working copy tenía credenciales dev (`minioadmin`/`minioadmin`). Se hizo `git rm --cached backend/.env` para dejar de trackearlo (el archivo sigue en disco para dev local).
+
+**Sync con código real:**
+- `docs/coding-patterns.md`: reemplazado `DocuVaultException` con `ApplicationError` real
+- `docs/coding-patterns.md`: actualizado exception handler con `ConflictError`, `ValidationError.details`, DRF passthrough
+- `docs/coding-patterns.md`: bug fix en `BaseModel.soft_delete()` — `update_fields=["deleted_at", "updated_at"]` (sin `updated_at`, `auto_now=True` no se dispara)
+
+**Rename DocuVault → SasVault:** en headers de `api-conventions.md`, `coding-patterns.md`, `phase-plan.md`.
+
+**CLAUDE.md §17 actualizado:** estado de "Fase 0" a "Fase 2 próxima a iniciar", Fase 1 completa, 167 tests / 99% coverage, decisiones Phase 2 documentadas.
+
+**Memory updated:** `current_phase.md` reescrita con Phase 1 detalle y 5 decisiones locked de Phase 2.
+
+---
+
+## Fase 2: Plan cerrado con 5 decisiones de diseño
+
+### Decisiones críticas (NO re-discutir durante implementación)
+
+1. **AuditLog mínimo en Fase 2.1** — Se construye el modelo + `audit_service.log()` ahora. Endpoints, filtros y permisos de lectura se difieren a Fase 3.1. Razón: CLAUDE.md §9 obliga a registrar todo evento crítico desde los services — no se puede dejar el hook vacío.
+
+2. **Storage tests mockeados primero** — `StorageService` tests unitarios con `boto3.client` mockeado. Integración real contra MinIO test bucket (`saasvault-test`) viene después. Razón: más rápido iterar con mocks; integración real cuando hay CI y el código esté estable.
+
+3. **Status approval deferred a Phase 3** — `Document.status` tiene 5 valores enum, pero Phase 2 services SOLO permiten draft ↔ under_review manuales. Transiciones a `approved`/`rejected` SOLO vía `WorkflowExecution` (Fase 3.2) — cambio a `approved` directo es rechazado con `ConflictError`. Razón: separar lógica de gestión documental (Phase 2) de workflows (Phase 3.2).
+
+4. **OCR task stub** — `process_ocr.delay()` como Celery task vacía invocada vía `transaction.on_commit()` desde `DocumentService.create_document`. Cuerpo real en Fase 4.2. Razón: infraestructura lista; comportamiento a rellenar cuando Celery esté configurado.
+
+5. **`AuditLog` usa `BigAutoField`, NO hereda `BaseModel`** — Logs inmutables (sin `updated_at`, sin `deleted_at`). Se escribe muchísimo, se lee por orden cronológico. BigAutoField indexado supera UUID v4 para este caso. Razón: performance en escritura/lectura secuencial de auditoría.
+
+### Plan de Fase 2 — Estructura y estimación
+
+**Subfases (en orden):**
+- **2.0** Pre-flight: crear app skeletons, registrar en INSTALLED_APPS, settings
+- **2.1** AuditLog model + service (4 tests estimados)
+- **2.2** Folder/Document/DocumentVersion models con índices (15 tests)
+- **2.3** FileValidator + StorageService (14 tests — 8 validator, 6 storage mocked)
+- **2.4** FolderService/Selector (18 tests — 12 service, 6 selector)
+- **2.5** DocumentService/Selector + OCR task stub (26 tests — 18 service, 8 selector)
+- **2.6** REST endpoints (27 tests — 12 folders, 15 documents)
+
+**Total estimado:** ~104 tests para mantener ≥95% coverage.
+
+**Commits anticipados:** 10 commits separados por lógica (model → service → selector → api).
+
+**Duración estimada:** 18–21 horas de trabajo efectivo (~3 semanas calendario).
+
+### Estado actual después de Phase 1
+
+| Métrica | Valor |
+|---------|-------|
+| Tests | 167 pasando |
+| Cobertura | 99% |
+| Schema OpenAPI | 0 errors / 0 warnings |
+| Branch | `develop`, 14 commits ahead de origin |
+| Apps completadas | auth + organizations + permissions + core + audit (skeleton) + documents (skeleton) |
+| Endpoints funcionales | 14 endpoints (6 auth + 4 organizations + 4 user management) |
+| Features funcionales | JWT con claims custom, multi-tenancy, RBAC 6 roles, soft delete, auditoría hooks ready |
+
+### Próximos pasos
+
+1. Commitear cambios (HECHO: `dae4199`, `d373fe4`)
+2. Iniciar Fase 2.0: crear app skeletons
+3. Implementar Fase 2.1–2.6 según el plan en `docs/phase-plan.md`
+
+---
+
+## 🔜 Próximo paso: Fase 2.0 — Pre-flight
+
+Cuando estés listo, la primera tarea de Fase 2:
 
 ```bash
-# 1. Activar entorno virtual
+# 1. Verificar que todo funciona
 source backend/.venv/bin/activate
-
-# 2. Verificar que los servicios de infraestructura corren
 docker compose up -d
 docker compose ps
 
-# 3. Inicializar proyecto Django
+# 2. Crear apps skeletons
 cd backend
-django-admin startproject config .
+python manage.py startapp audit apps/audit
+python manage.py startapp documents apps/documents
 
-# 4. Primera tarea en Claude Code:
-# "Lee CLAUDE.md y docs/phase-plan.md sección Fase 1.1.
-#  Configura settings en 4 capas: base.py, development.py, test.py, production.py.
-#  Conecta PostgreSQL usando python-decouple y el archivo .env existente."
+# 3. Actualizar apps.py en ambas y INSTALLED_APPS en base.py
+# (El plan en docs/phase-plan.md Fase 2.0 detalla esto)
+
+# 4. Crear manage.py init_storage command
+# 5. Primer commit: chore(documents,audit): create app skeletons
 ```
+
+El plan detallado para cada subfase está en `docs/phase-plan.md` Fase 2.
 
 ---
 
