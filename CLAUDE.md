@@ -695,16 +695,32 @@ fix/{name}    ← Corrección de bugs
 
 ## 17. Estado actual del proyecto
 
-**Fase actual:** 0 — Setup y configuración de entorno
+**Fase actual:** 2 — Gestión Documental Core (próxima a iniciar)
 
 **Completado:**
-- [ ] Estructura de carpetas creada
-- [ ] Docker Compose (PostgreSQL, Redis, MinIO)
-- [ ] Pre-commit hooks configurados
-- [ ] .gitignore y README profesionales
-- [ ] Variables de entorno (.env / .env.example)
+- [x] **Fase 0** — Setup completo: WSL2, Docker Compose (PG16 + Redis7 + MinIO),
+      pre-commit hooks, .env.example, estructura de carpetas
+- [x] **Fase 1.1** — Django + settings en 4 capas (base/development/test/production)
+- [x] **Fase 1.2** — Core app: BaseModel (UUID, soft delete con `db_index` en
+      `deleted_at`), SoftDeleteManager, ApplicationError + handler, StandardPagination
+- [x] **Fase 1.3** — Organizations: modelo, service, selector, API, tests
+- [x] **Fase 1.4** — Authentication: User custom (AbstractBaseUser),
+      JWT con claims personalizados (organization_id, role, email),
+      OrganizationTenantMiddleware, endpoints auth
+- [x] **Fase 1.5** — RBAC: IsOrganizationMember, HasRole (class factory), IsOrgAdmin,
+      IsSuperAdmin
+- [x] **Fase 1.6** — Gestión de usuarios dentro de la organización
+- [x] drf-spectacular configurado y operativo (0 errors / 0 warnings)
+- [x] Documentación API (Swagger UI en `/api/docs/`, Redoc en `/api/redoc/`)
 
-**Próximo paso:** Fase 1 — Inicializar Django y configurar settings en capas
+**Métricas:** 167 tests pasando, cobertura 99%.
+
+**Próximo paso:** Fase 2 — Gestión Documental Core.
+Decisiones de diseño cerradas (ver `docs/phase-plan.md` Fase 2):
+1. AuditLog mínimo se construye en Fase 2.1 (no se difiere a Fase 3).
+2. Tests de StorageService inician mockeados; integración real con MinIO después.
+3. `Document.status` aplica lock en Fase 2: solo draft ↔ under_review por API.
+   `approved` y `rejected` requieren WorkflowExecution (Fase 3.2).
 
 Ver `docs/phase-plan.md` para el plan completo de desarrollo.
 

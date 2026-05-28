@@ -1,4 +1,4 @@
-# docs/api-conventions.md — Convenciones REST DocuVault
+# docs/api-conventions.md — Convenciones REST SasVault
 
 > Referencia definitiva para el diseño de la API.
 > Todo endpoint nuevo debe seguir estas convenciones sin excepción.

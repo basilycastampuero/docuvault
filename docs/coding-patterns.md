@@ -1,4 +1,4 @@
-# docs/coding-patterns.md — Patrones de Código DocuVault
+# docs/coding-patterns.md — Patrones de Código SasVault
 
 > Referencia de patrones con ejemplos concretos.
 > Claude Code debe seguir estos patrones en TODO el código del proyecto.
@@ -303,11 +303,12 @@ class BaseModel(models.Model):
 
     def soft_delete(self):
         self.deleted_at = timezone.now()
-        self.save(update_fields=['deleted_at'])
+        # incluir updated_at: si no, auto_now=True no se dispara con update_fields
+        self.save(update_fields=["deleted_at", "updated_at"])
 
     def restore(self):
         self.deleted_at = None
-        self.save(update_fields=['deleted_at'])
+        self.save(update_fields=["deleted_at", "updated_at"])
 
     @property
     def is_deleted(self) -> bool:
@@ -615,63 +616,95 @@ def process_ocr(self, document_id: str) -> None:
 
 ```python
 # apps/core/exceptions.py
-from rest_framework.views import exception_handler
+import logging
+
+from rest_framework import status
 from rest_framework.response import Response
+from rest_framework.views import exception_handler
+
+logger = logging.getLogger(__name__)
 
 
-class DocuVaultException(Exception):
-    """Base exception para el proyecto"""
-    default_message = "An error occurred"
+class ApplicationError(Exception):
+    """Base exception for all SasVault business logic errors."""
+
     default_code = "ERROR"
-    status_code = 400
+    default_message = "An unexpected error occurred"
+    status_code = status.HTTP_400_BAD_REQUEST
 
-    def __init__(self, message=None, code=None):
+    def __init__(self, message: str | None = None, code: str | None = None) -> None:
         self.message = message or self.default_message
         self.code = code or self.default_code
         super().__init__(self.message)
 
 
-class ValidationError(DocuVaultException):
-    default_code = "VALIDATION_ERROR"
-    status_code = 400
-
-
-class PermissionDenied(DocuVaultException):
+class PermissionDenied(ApplicationError):
     default_code = "PERMISSION_DENIED"
-    status_code = 403
+    default_message = "You do not have permission to perform this action"
+    status_code = status.HTTP_403_FORBIDDEN
 
 
-class NotFound(DocuVaultException):
+class NotFound(ApplicationError):
     default_code = "NOT_FOUND"
-    status_code = 404
+    default_message = "The requested resource was not found"
+    status_code = status.HTTP_404_NOT_FOUND
 
 
-def custom_exception_handler(exc, context):
-    """Handler global de excepciones — retorna siempre el envelope de error."""
-    response = exception_handler(exc, context)
+class ValidationError(ApplicationError):
+    default_code = "VALIDATION_ERROR"
+    default_message = "Validation failed"
+    status_code = status.HTTP_400_BAD_REQUEST
 
-    if isinstance(exc, DocuVaultException):
+    def __init__(
+        self,
+        message: str | None = None,
+        code: str | None = None,
+        details: dict | None = None,
+    ) -> None:
+        super().__init__(message, code)
+        self.details = details or {}
+
+
+class ConflictError(ApplicationError):
+    default_code = "CONFLICT"
+    default_message = "A conflict occurred with the current state of the resource"
+    status_code = status.HTTP_409_CONFLICT
+
+
+def custom_exception_handler(exc: Exception, context: dict) -> Response | None:
+    """
+    Transforms all exceptions into the standard API error envelope:
+    {"error": {"code": "...", "message": "...", "details": {}}}
+    """
+    if isinstance(exc, ApplicationError):
+        details = getattr(exc, "details", {})
         return Response(
-            {
-                "error": {
-                    "code": exc.code,
-                    "message": exc.message,
-                }
-            },
+            {"error": {"code": exc.code, "message": exc.message, "details": details}},
             status=exc.status_code,
         )
 
+    response = exception_handler(exc, context)
     if response is not None:
-        return Response(
-            {
-                "error": {
-                    "code": "API_ERROR",
-                    "message": str(exc),
-                    "details": response.data,
-                }
-            },
-            status=response.status_code,
+        detail = (
+            response.data.get("detail") if isinstance(response.data, dict) else None
         )
+        if detail is not None:
+            code = getattr(detail, "code", "error").upper().replace(" ", "_")
+            message = str(detail)
+            details = {}
+        else:
+            code = "VALIDATION_ERROR"
+            message = "Validation failed"
+            details = response.data
 
+        response.data = {
+            "error": {"code": code, "message": message, "details": details}
+        }
     return response
 ```
+
+> El nombre de la clase base es `ApplicationError` (no `SasVaultException`) — neutro frente al
+> nombre del producto y consistente con el resto del ecosistema Django/DRF. Para errores
+> de validación con detalles por campo, usar `ValidationError(message, code, details={...})`.
+> Para conflictos de estado (ej: ya existe, no se puede eliminar porque tiene hijos), usar
+> `ConflictError`.
