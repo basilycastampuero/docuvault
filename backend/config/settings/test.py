@@ -18,3 +18,6 @@ STATICFILES_STORAGE = "django.contrib.staticfiles.storage.StaticFilesStorage"
 
 # Silence logging noise in test output
 LOGGING["root"]["level"] = "CRITICAL"  # noqa: F405
+
+# Isolated bucket for tests — never touch the dev bucket
+AWS_STORAGE_BUCKET_NAME = "saasvault-test"  # noqa: F405

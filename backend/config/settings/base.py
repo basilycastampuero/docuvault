@@ -40,8 +40,8 @@ LOCAL_APPS: list[str] = [
     "apps.organizations",
     "apps.authentication",
     "apps.permissions",
-    # "apps.documents",
-    # "apps.audit",
+    "apps.audit",
+    "apps.documents",
     # "apps.workflows",
     # "apps.notifications",
     # "apps.search",
@@ -283,3 +283,22 @@ USE_I18N = True
 USE_TZ = True
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# ---------------------------------------------------------------------------
+# File upload constraints
+# ---------------------------------------------------------------------------
+
+MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
+
+ALLOWED_UPLOAD_MIME_TYPES: frozenset[str] = frozenset(
+    {
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/msword",
+        "application/vnd.ms-excel",
+        "image/jpeg",
+        "image/png",
+        "application/zip",
+    }
+)
