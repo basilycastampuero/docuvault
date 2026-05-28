@@ -676,8 +676,15 @@ Configuración:
 Tareas iniciales:
     tasks.documents.process_ocr(document_id)
     tasks.documents.generate_thumbnail(document_id)
+    tasks.documents.cleanup_orphan_blobs()  (Celery Beat, diario — ver nota Fase 2)
     tasks.notifications.send_email(user_id, template, context)
     tasks.audit.cleanup_old_logs()  (Celery Beat, mensual)
+
+Nota cleanup_orphan_blobs (deuda conocida de Fase 2):
+    Al hacer soft-delete de un documento, el archivo en MinIO/S3 NO se elimina
+    inmediatamente. Esta tarea periódica lista objetos en el bucket cuyo path
+    no tiene un Document vivo correspondiente en DB y los elimina.
+    Evita que el storage crezca indefinidamente con blobs huérfanos.
 ```
 
 ### 4.2 Pipeline OCR
