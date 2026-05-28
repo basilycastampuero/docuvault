@@ -695,7 +695,7 @@ fix/{name}    ← Corrección de bugs
 
 ## 17. Estado actual del proyecto
 
-**Fase actual:** 2 — Gestión Documental Core (próxima a iniciar)
+**Fase actual:** 3 — Auditoría avanzada + Workflows + FTS (próxima a iniciar)
 
 **Completado:**
 - [x] **Fase 0** — Setup completo: WSL2, Docker Compose (PG16 + Redis7 + MinIO),
@@ -710,17 +710,48 @@ fix/{name}    ← Corrección de bugs
 - [x] **Fase 1.5** — RBAC: IsOrganizationMember, HasRole (class factory), IsOrgAdmin,
       IsSuperAdmin
 - [x] **Fase 1.6** — Gestión de usuarios dentro de la organización
+- [x] **Fase 2.0** — Skeletons de `apps/audit` y `apps/documents` registrados en
+      INSTALLED_APPS; constantes `MAX_UPLOAD_SIZE` y `ALLOWED_UPLOAD_MIME_TYPES`
+      en settings; `config/celery.py` wired up (necesario para `TASK_ALWAYS_EAGER`)
+- [x] **Fase 2.1** — `AuditLog` inmutable (BigAutoField, NO hereda BaseModel,
+      append-only), `audit_service.log()` llamado desde todos los services críticos
+- [x] **Fase 2.2** — Modelos `Folder`, `Document`, `DocumentVersion` con índices
+      compuestos, GIN (search_vector, metadata, tags), soft delete y UniqueConstraint
+      condicionales (deleted_at IS NULL)
+- [x] **Fase 2.3** — `FileValidator` (detección MIME real por magic bytes via
+      python-magic, SHA-256 checksum, límite 50 MB); `StorageService` (boto3/MinIO,
+      presigned URLs, `ensure_bucket`); comando `init_storage`
+- [x] **Fase 2.4** — `FolderService` (create/rename/move con detección de ciclos,
+      validación de tenant, soft delete con guard de hijos/documentos vivos);
+      `FolderSelector` (N+1 verificado con `select_related`)
+- [x] **Fase 2.5** — `DocumentService` (create con `transaction.atomic` + OCR stub
+      via `transaction.on_commit`; versioning; metadata update; status lock
+      draft ↔ under_review; soft delete sin borrar storage);
+      `DocumentSelector` (filtros por folder/status/tags/search, N+1 verificado)
+- [x] **Fase 2.6** — REST endpoints `/api/v1/folders/` y `/api/v1/documents/`
+      con RBAC (Editor+ para escrituras, cualquier miembro para lecturas),
+      envelope `{data, meta}`, paginación, serializers separados por operación
 - [x] drf-spectacular configurado y operativo (0 errors / 0 warnings)
 - [x] Documentación API (Swagger UI en `/api/docs/`, Redoc en `/api/redoc/`)
 
-**Métricas:** 167 tests pasando, cobertura 99%.
+**Métricas:** 285 tests pasando, cobertura 98%.
 
-**Próximo paso:** Fase 2 — Gestión Documental Core.
-Decisiones de diseño cerradas (ver `docs/phase-plan.md` Fase 2):
-1. AuditLog mínimo se construye en Fase 2.1 (no se difiere a Fase 3).
-2. Tests de StorageService inician mockeados; integración real con MinIO después.
-3. `Document.status` aplica lock en Fase 2: solo draft ↔ under_review por API.
-   `approved` y `rejected` requieren WorkflowExecution (Fase 3.2).
+**Apps activas en INSTALLED_APPS:**
+`apps.core`, `apps.organizations`, `apps.authentication`, `apps.permissions`,
+`apps.audit`, `apps.documents`
+
+**Decisiones de diseño cerradas de Fase 2 (ya implementadas, no re-discutir):**
+1. `AuditLog` usa `BigAutoField` (no UUID) y NO hereda `BaseModel` — inmutable,
+   append-only, consultado cronológicamente.
+2. Tests de `StorageService` son mockeados (boto3 via monkeypatch). Integración
+   real con MinIO se añade en Fase 4.
+3. `Document.status` acepta 5 valores pero solo `draft ↔ under_review` se permiten
+   manualmente. `approved`/`rejected` requieren `WorkflowExecution` (Fase 3.2).
+4. Tarea `process_ocr` existe como stub vacío; cuerpo real en Fase 4.2.
+5. El blob en MinIO NO se borra al soft-delete un documento. Cleanup en Fase 4.
+
+**Próximo paso:** Fase 3 — Auditoría avanzada (endpoints/filtros de AuditLog),
+Workflows (WorkflowTemplate + WorkflowExecution), Full-Text Search.
 
 Ver `docs/phase-plan.md` para el plan completo de desarrollo.
 
