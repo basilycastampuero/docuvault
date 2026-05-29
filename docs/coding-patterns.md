@@ -1,6 +1,6 @@
 # docs/coding-patterns.md — Patrones de Código SasVault
 
-> Referencia de patrones con ejemplos concretos.
+> Referencia de patrones con ejemplos concretos extraídos del código real.
 > Claude Code debe seguir estos patrones en TODO el código del proyecto.
 
 ---
@@ -15,305 +15,222 @@ Las views en Django/DRF tienden a convertirse en el basurero de toda la lógica.
 - **Selector:** solo lee (queries, filtros, agregaciones)
 - **View:** orquesta (llama service/selector, serializa, retorna respuesta HTTP)
 
-### Service — estructura tipo
+### Service — ejemplo real (`document_service.py`)
 
 ```python
 # apps/documents/services/document_service.py
-import hashlib
-from typing import Optional
-from django.db import transaction
-from django.core.files.uploadedfile import UploadedFile
+import logging
+from typing import IO, TYPE_CHECKING
 
-from apps.core.exceptions import ValidationError, PermissionDenied
-from apps.organizations.models import Organization
-from apps.authentication.models import User
-from apps.documents.models import Document, DocumentVersion, DocumentStatus
+from django.db import transaction
+
+from apps.audit.models import AuditAction
 from apps.audit.services import audit_service
-from apps.audit.constants import AuditAction
-from apps.documents.tasks import process_ocr
-from apps.documents.services.storage_service import storage_service
-from apps.documents.validators import validate_document_file
+from apps.core.exceptions import ConflictError, PermissionDenied
+from apps.documents.models import Document, DocumentStatus, DocumentVersion, Folder
+from apps.documents.storage import StorageService, validate_file
+from apps.documents.tasks.document_tasks import process_ocr
+
+if TYPE_CHECKING:
+    from apps.authentication.models import User
+    from apps.organizations.models import Organization
+
+logger = logging.getLogger(__name__)
 
 
 @transaction.atomic
 def create_document(
-    organization: Organization,
-    user: User,
-    file: UploadedFile,
+    organization: "Organization",
+    user: "User",
+    file: IO[bytes],
     name: str,
-    folder=None,
+    folder: Folder | None = None,
     description: str = "",
-    tags: list = None,
+    tags: list[str] | None = None,
 ) -> Document:
-    """
-    Upload a new document to the organization.
-    Validates file, uploads to storage, creates DB record and first version.
-    """
-    # 1. Validar
-    validate_document_file(file)
+    """Upload a file and create a Document with its initial DocumentVersion."""
+    if folder is not None and folder.organization_id != organization.pk:
+        raise PermissionDenied("Folder does not belong to this organization.")
 
-    # 2. Calcular checksum
-    checksum = _calculate_checksum(file)
+    mime_type, file_size, checksum = validate_file(file)
 
-    # 3. Subir a storage
-    storage_path = storage_service.upload_file(
-        file=file,
+    doc = Document.objects.create(
         organization=organization,
-        document_id=None,  # se genera en el modelo
-    )
-
-    # 4. Crear registro en DB
-    document = Document.objects.create(
-        organization=organization,
-        created_by=user,
         folder=folder,
         name=name,
         description=description,
-        mime_type=file.content_type,
-        file_size=file.size,
+        mime_type=mime_type,
+        file_size=file_size,
         checksum=checksum,
-        storage_path=storage_path,
+        storage_path="",          # temporal hasta confirmar el upload
         status=DocumentStatus.DRAFT,
         version=1,
+        created_by=user,
         tags=tags or [],
     )
 
-    # 5. Crear primera versión
+    storage = StorageService()
+    path = StorageService.build_storage_path(str(organization.id), str(doc.id), name)
+    storage.upload_file(file, path, content_type=mime_type)
+    doc.storage_path = path
+    doc.save(update_fields=["storage_path", "updated_at"])
+
     DocumentVersion.objects.create(
-        document=document,
+        document=doc,
         version_number=1,
-        storage_path=storage_path,
-        file_size=file.size,
+        storage_path=path,
+        file_size=file_size,
         checksum=checksum,
+        mime_type=mime_type,
         created_by=user,
-        change_description="Initial upload",
+        change_description="Initial version",
     )
 
-    # 6. Disparar OCR async
-    process_ocr.delay(str(document.id))
-
-    # 7. Auditar
     audit_service.log(
         organization=organization,
         user=user,
-        entity=document,
+        entity_type="document",
+        entity_id=str(doc.id),
         action=AuditAction.CREATE,
+        new_values={"name": name, "mime_type": mime_type, "file_size": file_size},
     )
 
-    return document
-
-
-def _calculate_checksum(file: UploadedFile) -> str:
-    """Calculate SHA256 checksum of uploaded file."""
-    sha256 = hashlib.sha256()
-    for chunk in file.chunks():
-        sha256.update(chunk)
-    file.seek(0)  # Reset file pointer after reading
-    return sha256.hexdigest()
+    # El task se encola DESPUÉS del commit para evitar que se procese
+    # antes de que exista el registro en DB.
+    transaction.on_commit(lambda: process_ocr.delay(str(doc.id)))
+    return doc
 ```
 
-### Selector — estructura tipo
+**Regla crítica:** `transaction.on_commit()` para side-effects async. Si el task se lanzara dentro de la transacción y esta hiciera rollback, el worker intentaría procesar un documento que no existe.
+
+### Selector — ejemplo real (`document_selector.py`)
 
 ```python
 # apps/documents/selectors/document_selector.py
-from typing import Optional
-from django.db.models import QuerySet
-from django.contrib.postgres.search import SearchQuery, SearchRank
+import uuid
+from typing import TYPE_CHECKING
 
-from apps.organizations.models import Organization
-from apps.authentication.models import User
-from apps.documents.models import Document, DocumentStatus
+from apps.core.exceptions import NotFound
+from apps.documents.models import Document, DocumentStatus, DocumentVersion
 
-
-def get_documents(
-    organization: Organization,
-    user: User,
-    folder_id: Optional[str] = None,
-    status: Optional[str] = None,
-    search: Optional[str] = None,
-    include_deleted: bool = False,
-) -> QuerySet:
-    """
-    Return documents visible to user within the organization.
-    Applies all filters and tenant isolation.
-    """
-    qs = Document.objects.filter(organization=organization)
-
-    if not include_deleted:
-        qs = qs.filter(deleted_at__isnull=True)
-
-    if folder_id:
-        qs = qs.filter(folder_id=folder_id)
-
-    if status:
-        qs = qs.filter(status=status)
-
-    if search:
-        query = SearchQuery(search, config='spanish')
-        qs = (
-            qs.annotate(rank=SearchRank('search_vector', query))
-              .filter(search_vector=query)
-              .order_by('-rank')
-        )
-
-    return qs.select_related('created_by', 'folder').order_by('-created_at')
+if TYPE_CHECKING:
+    from django.db.models import QuerySet
+    from apps.organizations.models import Organization
 
 
 def get_document_by_id(
-    organization: Organization,
-    document_id: str,
-    include_deleted: bool = False,
+    organization: "Organization", document_id: str | uuid.UUID
 ) -> Document:
-    """
-    Return a single document by ID, scoped to organization.
-    Raises Document.DoesNotExist if not found or wrong org.
-    """
-    qs = Document.objects.filter(organization=organization, id=document_id)
-    if not include_deleted:
-        qs = qs.filter(deleted_at__isnull=True)
-    return qs.select_related('created_by', 'folder', 'organization').get()
+    """Return a document by id scoped to the organization. Raises NotFound otherwise."""
+    try:
+        return Document.objects.select_related("folder", "created_by").get(
+            id=document_id, organization=organization
+        )
+    except Document.DoesNotExist:
+        raise NotFound(f"Document {document_id} not found.")
+
+
+def get_documents(
+    organization: "Organization",
+    folder=None,
+    status: DocumentStatus | None = None,
+    tags: list[str] | None = None,
+    search: str | None = None,
+) -> "QuerySet[Document]":
+    """Return a filtered queryset of documents for the organization."""
+    qs = (
+        Document.objects.filter(organization=organization)
+        .select_related("folder", "created_by")  # evita N+1
+        .order_by("-created_at")
+    )
+    if folder is not None:
+        qs = qs.filter(folder=folder)
+    if status is not None:
+        qs = qs.filter(status=status)
+    if tags:
+        qs = qs.filter(tags__overlap=tags)  # ArrayField overlap
+    if search:
+        qs = qs.filter(name__icontains=search)  # FTS real en Fase 3.3
+    return qs
 ```
 
-### View — estructura tipo
+**Regla:** todo selector que devuelve una lista debe declarar `select_related` / `prefetch_related`. Sin esto, serializar 50 documentos genera 150+ queries.
+
+### View — ejemplo real (`views.py`)
 
 ```python
 # apps/documents/api/views.py
 from rest_framework.views import APIView
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework import status
 
-from apps.permissions.permissions import IsOrganizationMember, HasRole
-from apps.authentication.constants import UserRole
-from apps.documents.api.serializers import (
-    DocumentSerializer,
-    DocumentCreateSerializer,
-    DocumentListSerializer,
-)
+from apps.core.pagination import StandardPagination
+from apps.documents.api.serializers import DocumentSerializer, DocumentUploadSerializer
+from apps.documents.selectors import get_document_by_id, get_documents
 from apps.documents.services import document_service
-from apps.documents.selectors import document_selector
+from apps.permissions.permissions import IsOrganizationMember
 
 
 class DocumentListCreateView(APIView):
     permission_classes = [IsOrganizationMember]
     parser_classes = [MultiPartParser, FormParser]
 
-    def get(self, request):
-        documents = document_selector.get_documents(
+    def get(self, request: Request) -> Response:
+        qs = get_documents(
             organization=request.organization,
-            user=request.user,
-            folder_id=request.query_params.get('folder'),
-            status=request.query_params.get('status'),
-            search=request.query_params.get('q'),
+            status=request.query_params.get("status"),
+            search=request.query_params.get("search"),
         )
-        serializer = DocumentListSerializer(documents, many=True)
-        return Response({'data': serializer.data})
+        paginator = StandardPagination()
+        page = paginator.paginate_queryset(qs, request)
+        serializer = DocumentSerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
-    def post(self, request):
-        serializer = DocumentCreateSerializer(data=request.data)
+    def post(self, request: Request) -> Response:
+        serializer = DocumentUploadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
-        document = document_service.create_document(
+        doc = document_service.create_document(
             organization=request.organization,
             user=request.user,
             **serializer.validated_data,
         )
-        return Response(
-            {'data': DocumentSerializer(document).data},
-            status=status.HTTP_201_CREATED,
-        )
-
-
-class DocumentDetailView(APIView):
-    permission_classes = [IsOrganizationMember]
-
-    def get_object(self, request, document_id):
-        try:
-            return document_selector.get_document_by_id(
-                organization=request.organization,
-                document_id=document_id,
-            )
-        except Document.DoesNotExist:
-            raise NotFound(detail="Document not found")
-
-    def get(self, request, document_id):
-        document = self.get_object(request, document_id)
-        return Response({'data': DocumentSerializer(document).data})
-
-    def patch(self, request, document_id):
-        document = self.get_object(request, document_id)
-        serializer = DocumentUpdateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        document = document_service.update_document(
-            organization=request.organization,
-            user=request.user,
-            document=document,
-            **serializer.validated_data,
-        )
-        return Response({'data': DocumentSerializer(document).data})
-
-    def delete(self, request, document_id):
-        document = self.get_object(request, document_id)
-        document_service.soft_delete_document(
-            organization=request.organization,
-            user=request.user,
-            document=document,
-        )
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response({"data": DocumentSerializer(doc).data}, status=status.HTTP_201_CREATED)
 ```
+
+**Regla:** la view nunca llama a `Model.objects.*` directamente. Solo orquesta entre serializers, selectors y services.
 
 ---
 
 ## 2. Patrón BaseModel
 
+El código real está en `apps/core/models/base.py`. Puntos clave:
+
 ```python
-# apps/core/models/base.py
-import uuid
-from django.db import models
-from django.utils import timezone
-
-
-class SoftDeleteManager(models.Manager):
-    def get_queryset(self):
-        return super().get_queryset().filter(deleted_at__isnull=True)
-
-
-class AllObjectsManager(models.Manager):
-    """Manager que incluye objetos eliminados — usar con cuidado."""
-    pass
-
-
 class BaseModel(models.Model):
-    id = models.UUIDField(
-        primary_key=True,
-        default=uuid.uuid4,
-        editable=False,
-    )
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
-    # Manager por defecto excluye soft-deleted
-    objects = SoftDeleteManager()
-    # Para acceder a todos los objetos incluyendo eliminados
-    all_objects = AllObjectsManager()
+    objects = SoftDeleteManager()       # excluye deleted_at IS NOT NULL (default)
+    all_objects = AllObjectsManager()   # incluye todos — usar solo en admin/auditoría
 
     class Meta:
         abstract = True
 
-    def soft_delete(self):
+    def soft_delete(self) -> None:
         self.deleted_at = timezone.now()
-        # incluir updated_at: si no, auto_now=True no se dispara con update_fields
         self.save(update_fields=["deleted_at", "updated_at"])
-
-    def restore(self):
-        self.deleted_at = None
-        self.save(update_fields=["deleted_at", "updated_at"])
-
-    @property
-    def is_deleted(self) -> bool:
-        return self.deleted_at is not None
 ```
+
+**Reglas de uso:**
+- Todo modelo de dominio hereda de `BaseModel`. Nunca de `models.Model` directamente.
+- `AuditLog` es la única excepción: no hereda de `BaseModel` porque es inmutable (sin `updated_at`, sin `deleted_at`).
+- Para soft delete en entidades críticas: `document_service.soft_delete_document(...)`, nunca `.delete()` directo.
+- `Model.objects` ya filtra `deleted_at IS NULL`. No repetir el filtro en selectors.
+- Para acceder a registros eliminados: `Model.all_objects.filter(...)`.
 
 ---
 
@@ -322,389 +239,378 @@ class BaseModel(models.Model):
 ```python
 # apps/permissions/permissions.py
 from rest_framework.permissions import BasePermission
-from apps.authentication.constants import UserRole
+from apps.authentication.models import UserRole
 
 
 class IsOrganizationMember(BasePermission):
     """
-    Verifica que el usuario autenticado pertenezca a la organización del request.
-    Requiere que OrganizationTenantMiddleware haya inyectado request.organization.
+    Requiere OrganizationTenantMiddleware (inyecta request.organization).
+    Verifica que el usuario pertenezca a la organización del request.
     """
-    message = "You do not have access to this organization."
+    message = "You are not a member of this organization."
 
-    def has_permission(self, request, view):
+    def has_permission(self, request, view) -> bool:
         if not request.user or not request.user.is_authenticated:
             return False
-        if not hasattr(request, 'organization'):
+        if request.organization is None:
             return False
-        return request.user.organization == request.organization
+        return request.user.organization_id == request.organization.id
 
 
-class HasRole(BasePermission):
+def HasRole(*roles: str):
     """
-    Verifica que el usuario tenga al menos uno de los roles requeridos.
-    Uso: permission_classes = [IsOrganizationMember, HasRole]
-         required_roles = [UserRole.ORG_ADMIN, UserRole.SUPER_ADMIN]
+    Class factory. Devuelve una clase de permiso para los roles dados.
+
+    Uso: permission_classes = [IsOrganizationMember, HasRole(UserRole.ORG_ADMIN)]
+    O en código: HasRole("org_admin", "supervisor", "editor")()
     """
-    required_roles = []
-    message = "You do not have the required role for this action."
+    class _HasRole(BasePermission):
+        required_roles = roles
+        message = f"Required role: {', '.join(roles)}."
 
-    def has_permission(self, request, view):
-        if not request.user or not request.user.is_authenticated:
-            return False
-        required = getattr(view, 'required_roles', self.required_roles)
-        return request.user.role in required
+        def has_permission(self, request, view) -> bool:
+            if not request.user or not request.user.is_authenticated:
+                return False
+            return request.user.role in self.required_roles
 
-
-class IsSuperAdmin(BasePermission):
-    message = "Super admin access required."
-
-    def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.role == UserRole.SUPER_ADMIN
-        )
+    _HasRole.__name__ = f"HasRole({', '.join(roles)})"
+    return _HasRole
 
 
-class IsOrgAdmin(BasePermission):
-    message = "Organization admin access required."
+# Atajos de uso frecuente
+IsSuperAdmin = HasRole(UserRole.SUPER_ADMIN)
+IsOrgAdmin = HasRole(UserRole.ORG_ADMIN, UserRole.SUPER_ADMIN)
+```
 
-    def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.role in [UserRole.ORG_ADMIN, UserRole.SUPER_ADMIN]
-        )
+**Importante:** `HasRole(...)` retorna una **clase**, no una instancia. Para usarlo fuera de `permission_classes`:
+
+```python
+# ✅ Correcto — instanciar con ()
+perm = HasRole("org_admin", "editor")()
+if not perm.has_permission(request, None):
+    raise PermissionDenied()
+
+# ❌ Incorrecto — HasRole(...) es una clase, no una instancia
+perm = HasRole("org_admin", "editor")
+perm.has_permission(request, None)  # TypeError
 ```
 
 ---
 
 ## 4. Patrón de Tests con factory-boy
 
+Las factories están en `apps/{app}/tests/factories.py` de cada app. Ejemplo real:
+
 ```python
-# backend/tests/factories.py
+# apps/documents/tests/factories.py
 import factory
-from factory.django import DjangoModelFactory
-from django.contrib.auth.hashers import make_password
-
-from apps.organizations.models import Organization
-from apps.authentication.models import User, UserRole
-from apps.documents.models import Document, DocumentStatus, Folder
+from apps.authentication.tests.factories import UserFactory
+from apps.documents.models import Document, DocumentStatus, DocumentVersion, Folder
+from apps.organizations.tests.factories import OrganizationFactory
 
 
-class OrganizationFactory(DjangoModelFactory):
-    class Meta:
-        model = Organization
-
-    name = factory.Sequence(lambda n: f"Organization {n}")
-    slug = factory.LazyAttribute(lambda o: o.name.lower().replace(' ', '-'))
-    is_active = True
-
-
-class UserFactory(DjangoModelFactory):
-    class Meta:
-        model = User
-
-    email = factory.Sequence(lambda n: f"user{n}@example.com")
-    password = factory.LazyFunction(lambda: make_password("testpassword123"))
-    organization = factory.SubFactory(OrganizationFactory)
-    role = UserRole.EDITOR
-    is_active = True
-
-
-class OrgAdminFactory(UserFactory):
-    role = UserRole.ORG_ADMIN
-
-
-class FolderFactory(DjangoModelFactory):
+class FolderFactory(factory.django.DjangoModelFactory):
     class Meta:
         model = Folder
 
-    name = factory.Sequence(lambda n: f"Folder {n}")
     organization = factory.SubFactory(OrganizationFactory)
-    owner = factory.SubFactory(UserFactory)
+    name = factory.Sequence(lambda n: f"Folder {n}")
     parent = None
+    owner = factory.SubFactory(UserFactory)
 
 
-class DocumentFactory(DjangoModelFactory):
+class DocumentFactory(factory.django.DjangoModelFactory):
     class Meta:
         model = Document
 
-    name = factory.Sequence(lambda n: f"document_{n}.pdf")
     organization = factory.SubFactory(OrganizationFactory)
-    created_by = factory.SubFactory(UserFactory)
-    folder = None
-    status = DocumentStatus.DRAFT
+    name = factory.Sequence(lambda n: f"document_{n}.pdf")
     mime_type = "application/pdf"
     file_size = 1024
-    checksum = factory.Sequence(lambda n: f"checksum_{n}")
-    storage_path = factory.Sequence(lambda n: f"org/2024/01/doc_{n}/file.pdf")
+    checksum = factory.Sequence(lambda n: f"{'a' * 63}{n}"[:64])
+    storage_path = factory.Sequence(lambda n: f"org/2026/01/{n}/file.pdf")
+    status = DocumentStatus.DRAFT
     version = 1
+    created_by = factory.SubFactory(UserFactory)
+    tags = factory.LazyFunction(list)
+    metadata = factory.LazyFunction(dict)
 ```
+
+Test completo con mock de StorageService:
 
 ```python
-# Ejemplo de test completo
 # apps/documents/tests/test_document_service.py
+import io
+from unittest.mock import MagicMock, patch
 import pytest
-from django.core.files.uploadedfile import SimpleUploadedFile
-from unittest.mock import patch, MagicMock
 
-from apps.documents.services import document_service
-from apps.documents.models import Document, DocumentVersion
-from tests.factories import OrganizationFactory, UserFactory, FolderFactory
+from apps.audit.models import AuditAction, AuditLog
+from apps.authentication.tests.factories import UserFactory
+from apps.core.exceptions import PermissionDenied
+from apps.documents.models import Document, DocumentStatus, DocumentVersion
+from apps.documents.services.document_service import create_document
+from apps.documents.storage.storage_service import StorageService as RealStorageService
+from apps.organizations.tests.factories import OrganizationFactory
+
+PDF_HEADER = b"%PDF-1.4\n" + b"%" * 100
 
 
-@pytest.mark.django_db
+@pytest.fixture
+def mock_storage(monkeypatch):
+    """Mockea StorageService sin tocar MinIO."""
+    mock_instance = MagicMock()
+    mock_instance.upload_file.return_value = "org/2026/01/doc/file.pdf"
+    mock_class = MagicMock()
+    mock_class.return_value = mock_instance
+    # Preservar el método estático — si no, build_storage_path devuelve MagicMock
+    mock_class.build_storage_path = RealStorageService.build_storage_path
+    monkeypatch.setattr(
+        "apps.documents.services.document_service.StorageService", mock_class
+    )
+    return mock_instance
+
+
+@pytest.mark.django_db(transaction=True)
 class TestCreateDocument:
-
-    def test_creates_document_successfully(self):
-        """Happy path: document is created with correct data"""
+    def test_creates_document_with_version(self, mock_storage):
         org = OrganizationFactory()
         user = UserFactory(organization=org)
-        file = SimpleUploadedFile("test.pdf", b"PDF content", content_type="application/pdf")
+        doc = create_document(
+            organization=org,
+            user=user,
+            file=io.BytesIO(PDF_HEADER + b"content"),
+            name="report.pdf",
+        )
+        assert doc.status == DocumentStatus.DRAFT
+        assert doc.version == 1
+        assert DocumentVersion.objects.filter(document=doc, version_number=1).exists()
 
-        with patch('apps.documents.services.document_service.storage_service.upload_file') as mock_upload:
-            mock_upload.return_value = "org/2024/01/test.pdf"
-
-            with patch('apps.documents.services.document_service.process_ocr.delay'):
-                document = document_service.create_document(
-                    organization=org,
-                    user=user,
-                    file=file,
-                    name="Test Document",
-                )
-
-        assert document.organization == org
-        assert document.created_by == user
-        assert document.name == "Test Document"
-        assert document.version == 1
-        assert Document.objects.filter(organization=org).count() == 1
-        assert DocumentVersion.objects.filter(document=document).count() == 1
-
-    def test_creates_first_document_version(self):
-        """Should automatically create DocumentVersion on creation"""
+    def test_storage_failure_rolls_back_document(self, mock_storage):
+        """Si storage.upload_file falla, la transacción revierte el Document."""
+        mock_storage.upload_file.side_effect = RuntimeError("S3 timeout")
         org = OrganizationFactory()
         user = UserFactory(organization=org)
-        file = SimpleUploadedFile("test.pdf", b"content", content_type="application/pdf")
+        with pytest.raises(RuntimeError):
+            create_document(
+                organization=org,
+                user=user,
+                file=io.BytesIO(PDF_HEADER + b"x"),
+                name="fail.pdf",
+            )
+        assert Document.objects.filter(organization=org).count() == 0
 
-        with patch('apps.documents.services.document_service.storage_service.upload_file') as mock_upload:
-            mock_upload.return_value = "path/to/file.pdf"
-            with patch('apps.documents.services.document_service.process_ocr.delay'):
-                document = document_service.create_document(
-                    organization=org, user=user, file=file, name="Doc"
-                )
-
-        version = DocumentVersion.objects.get(document=document)
-        assert version.version_number == 1
-        assert version.created_by == user
-
-    def test_tenant_isolation(self):
-        """User from org B cannot create document in org A"""
-        org_a = OrganizationFactory()
-        org_b = OrganizationFactory()
-        user_from_b = UserFactory(organization=org_b)
-        file = SimpleUploadedFile("test.pdf", b"content", content_type="application/pdf")
-
-        with pytest.raises(Exception):  # PermissionDenied o similar
-            document_service.create_document(
-                organization=org_a,  # org diferente al usuario
-                user=user_from_b,
-                file=file,
-                name="Doc",
+    def test_rejects_folder_from_other_org(self, mock_storage):
+        from .factories import FolderFactory
+        org1 = OrganizationFactory()
+        org2 = OrganizationFactory()
+        user = UserFactory(organization=org1)
+        folder = FolderFactory(organization=org2)
+        with pytest.raises(PermissionDenied):
+            create_document(
+                organization=org1, user=user,
+                file=io.BytesIO(PDF_HEADER), name="x.pdf",
+                folder=folder,
             )
 
-    def test_invalid_mime_type_raises(self):
-        """Should reject files with invalid MIME type"""
+    def test_on_commit_dispatches_ocr(self, mock_storage):
         org = OrganizationFactory()
         user = UserFactory(organization=org)
-        # .exe no está permitido
-        file = SimpleUploadedFile("malware.exe", b"MZ content", content_type="application/x-msdownload")
-
-        with pytest.raises(Exception):  # ValidationError
-            document_service.create_document(
-                organization=org, user=user, file=file, name="Bad file"
+        with patch("apps.documents.services.document_service.process_ocr.delay") as mock_delay:
+            doc = create_document(
+                organization=org, user=user,
+                file=io.BytesIO(PDF_HEADER), name="b.pdf",
             )
+            mock_delay.assert_called_once_with(str(doc.id))
 ```
+
+**Notas del patrón de mock:**
+- `mock_class.build_storage_path = RealStorageService.build_storage_path` es obligatorio — `MagicMock()` elimina los métodos estáticos.
+- Tests con `@django_db(transaction=True)` son necesarios cuando se prueba `transaction.on_commit()`. En modo sin transacción real, `on_commit` se ejecuta inmediatamente.
+- El mock se aplica sobre el **path de importación en el módulo del service** (`apps.documents.services.document_service.StorageService`), no sobre el path de definición.
 
 ---
 
 ## 5. Patrón Serializers
 
+Dos tipos según el sentido del dato:
+
 ```python
 # apps/documents/api/serializers.py
 from rest_framework import serializers
-from apps.documents.models import Document
+from apps.documents.models import Document, DocumentStatus, DocumentVersion
 
 
 class DocumentSerializer(serializers.ModelSerializer):
-    """Serializer de lectura — para respuestas de la API"""
-    created_by_email = serializers.EmailField(source='created_by.email', read_only=True)
-    folder_name = serializers.CharField(source='folder.name', read_only=True, allow_null=True)
+    """Serializer de LECTURA — para respuestas. Todos los campos son read_only."""
+    folder_name = serializers.CharField(source="folder.name", read_only=True, allow_null=True)
+    created_by_email = serializers.CharField(source="created_by.email", read_only=True)
 
     class Meta:
         model = Document
         fields = [
-            'id', 'name', 'description', 'mime_type', 'file_size',
-            'status', 'version', 'tags', 'metadata',
-            'created_by_email', 'folder_name',
-            'created_at', 'updated_at',
+            "id", "name", "description", "mime_type", "file_size", "checksum",
+            "status", "version", "tags", "metadata",
+            "folder", "folder_name", "created_by_email",
+            "created_at", "updated_at",
         ]
-        read_only_fields = fields  # Solo lectura — nunca usarlo para crear/editar
+        read_only_fields = ["id", "mime_type", "file_size", "checksum", "version",
+                            "folder_name", "created_by_email", "created_at", "updated_at"]
 
 
-class DocumentCreateSerializer(serializers.Serializer):
-    """Serializer de escritura — solo valida entrada, no toca el modelo directamente"""
+class DocumentUploadSerializer(serializers.Serializer):
+    """Serializer de ESCRITURA — solo valida entrada. No tiene Meta ni modelo."""
     file = serializers.FileField()
     name = serializers.CharField(max_length=255)
-    description = serializers.CharField(required=False, default="", allow_blank=True)
-    folder_id = serializers.UUIDField(required=False, allow_null=True)
+    folder_id = serializers.UUIDField(required=False, allow_null=True, default=None)
+    description = serializers.CharField(required=False, allow_blank=True, default="")
     tags = serializers.ListField(
         child=serializers.CharField(max_length=50),
         required=False,
         default=list,
     )
 
-    def validate_name(self, value):
-        if len(value.strip()) == 0:
-            raise serializers.ValidationError("Name cannot be empty.")
-        return value.strip()
+
+class DocumentMetadataUpdateSerializer(serializers.Serializer):
+    """Solo expone los campos que se pueden editar manualmente en Fase 2."""
+    name = serializers.CharField(max_length=255, required=False)
+    description = serializers.CharField(allow_blank=True, required=False)
+    tags = serializers.ListField(child=serializers.CharField(max_length=50), required=False)
+    # Status limitado: approved/rejected requieren WorkflowExecution (Fase 3.2)
+    status = serializers.ChoiceField(
+        choices=[DocumentStatus.DRAFT, DocumentStatus.UNDER_REVIEW],
+        required=False,
+    )
 ```
+
+**Regla:** separar siempre serializer de lectura (ModelSerializer) de serializer de escritura (Serializer plano). Nunca usar el mismo para ambos sentidos.
 
 ---
 
 ## 6. Patrón Celery Tasks
 
 ```python
-# apps/documents/tasks/ocr_tasks.py
+# apps/documents/tasks/document_tasks.py
 import logging
 from celery import shared_task
-from celery.exceptions import Retry
 
 logger = logging.getLogger(__name__)
 
 
-@shared_task(
-    bind=True,
-    max_retries=3,
-    default_retry_delay=60,  # 60 segundos entre reintentos
-    name='documents.process_ocr',
-)
-def process_ocr(self, document_id: str) -> None:
-    """
-    Async task: run OCR on a document and update its search index.
-    Retries up to 3 times on failure.
-    """
-    from apps.documents.models import Document
-    from apps.documents.services import ocr_service
-
-    try:
-        document = Document.objects.get(id=document_id)
-        ocr_service.process_document(document)
-        logger.info(f"OCR completed for document {document_id}")
-    except Document.DoesNotExist:
-        logger.error(f"Document {document_id} not found for OCR processing")
-        # No retry si el documento no existe
-    except Exception as exc:
-        logger.warning(f"OCR failed for document {document_id}, retrying: {exc}")
-        raise self.retry(exc=exc)
+@shared_task
+def process_ocr(document_id: str) -> None:
+    """OCR stub — body implemented in Phase 4.2."""
+    logger.info("OCR stub invoked for document %s", document_id)
 ```
+
+**Reglas:**
+- Usar `@shared_task` (no `@app.task`): funciona con cualquier app Celery sin import circular.
+- Nunca poner lógica de negocio en la tarea. Llamar a un service:
+  ```python
+  @shared_task
+  def process_ocr(document_id: str) -> None:
+      from apps.documents.services import ocr_service  # import lazy — evita ciclos
+      document = Document.objects.get(id=document_id)
+      ocr_service.process(document)
+  ```
+- Las tareas se definen en `apps/{app}/tasks/{nombre}_tasks.py`.
+- Se disparan desde services vía `transaction.on_commit(lambda: task.delay(id))`.
+- **NUNCA** disparar tasks directamente desde views o dentro de una transacción activa.
 
 ---
 
 ## 7. Patrón de respuesta de errores
 
+Todas las excepciones se transforman al envelope `{error: {code, message, details}}` por `custom_exception_handler` en `apps/core/exceptions.py`.
+
 ```python
-# apps/core/exceptions.py
-import logging
+# Uso en services/selectors
+from apps.core.exceptions import (
+    NotFound,
+    PermissionDenied,
+    ValidationError,
+    ConflictError,
+)
 
-from rest_framework import status
-from rest_framework.response import Response
-from rest_framework.views import exception_handler
+# NotFound — el recurso no existe o no pertenece a la org
+raise NotFound(f"Document {document_id} not found.")
 
-logger = logging.getLogger(__name__)
+# PermissionDenied — el usuario no tiene acceso
+raise PermissionDenied("Folder does not belong to this organization.")
 
+# ValidationError — entrada inválida con detalles opcionales
+raise ValidationError(
+    message="File type 'application/x-msdownload' is not allowed.",
+    code="INVALID_MIME_TYPE",
+)
 
-class ApplicationError(Exception):
-    """Base exception for all SasVault business logic errors."""
-
-    default_code = "ERROR"
-    default_message = "An unexpected error occurred"
-    status_code = status.HTTP_400_BAD_REQUEST
-
-    def __init__(self, message: str | None = None, code: str | None = None) -> None:
-        self.message = message or self.default_message
-        self.code = code or self.default_code
-        super().__init__(self.message)
-
-
-class PermissionDenied(ApplicationError):
-    default_code = "PERMISSION_DENIED"
-    default_message = "You do not have permission to perform this action"
-    status_code = status.HTTP_403_FORBIDDEN
-
-
-class NotFound(ApplicationError):
-    default_code = "NOT_FOUND"
-    default_message = "The requested resource was not found"
-    status_code = status.HTTP_404_NOT_FOUND
-
-
-class ValidationError(ApplicationError):
-    default_code = "VALIDATION_ERROR"
-    default_message = "Validation failed"
-    status_code = status.HTTP_400_BAD_REQUEST
-
-    def __init__(
-        self,
-        message: str | None = None,
-        code: str | None = None,
-        details: dict | None = None,
-    ) -> None:
-        super().__init__(message, code)
-        self.details = details or {}
-
-
-class ConflictError(ApplicationError):
-    default_code = "CONFLICT"
-    default_message = "A conflict occurred with the current state of the resource"
-    status_code = status.HTTP_409_CONFLICT
-
-
-def custom_exception_handler(exc: Exception, context: dict) -> Response | None:
-    """
-    Transforms all exceptions into the standard API error envelope:
-    {"error": {"code": "...", "message": "...", "details": {}}}
-    """
-    if isinstance(exc, ApplicationError):
-        details = getattr(exc, "details", {})
-        return Response(
-            {"error": {"code": exc.code, "message": exc.message, "details": details}},
-            status=exc.status_code,
-        )
-
-    response = exception_handler(exc, context)
-    if response is not None:
-        detail = (
-            response.data.get("detail") if isinstance(response.data, dict) else None
-        )
-        if detail is not None:
-            code = getattr(detail, "code", "error").upper().replace(" ", "_")
-            message = str(detail)
-            details = {}
-        else:
-            code = "VALIDATION_ERROR"
-            message = "Validation failed"
-            details = response.data
-
-        response.data = {
-            "error": {"code": code, "message": message, "details": details}
-        }
-    return response
+# ConflictError — conflicto de estado (no se puede borrar, transición inválida)
+raise ConflictError(
+    message="Cannot transition from 'draft' to 'approved' manually.",
+    code="INVALID_STATUS_TRANSITION",
+)
 ```
 
-> El nombre de la clase base es `ApplicationError` (no `SasVaultException`) — neutro frente al
-> nombre del producto y consistente con el resto del ecosistema Django/DRF. Para errores
-> de validación con detalles por campo, usar `ValidationError(message, code, details={...})`.
-> Para conflictos de estado (ej: ya existe, no se puede eliminar porque tiene hijos), usar
-> `ConflictError`.
+Respuesta HTTP resultante (ejemplo NotFound):
+```json
+{
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "Document abc-123 not found.",
+    "details": {}
+  }
+}
+```
+
+**Mapa de excepciones → HTTP:**
+| Excepción | HTTP | Cuándo usar |
+|-----------|------|-------------|
+| `NotFound` | 404 | Recurso no existe o no pertenece a la org |
+| `PermissionDenied` | 403 | Sin permisos (RBAC o tenant) |
+| `ValidationError` | 400 | Datos de entrada inválidos |
+| `ConflictError` | 409 | Estado incompatible (tiene hijos, status inválido) |
+
+---
+
+## 8. AuditLog — cómo registrar eventos
+
+Llamar siempre desde **services**, nunca desde views.
+
+```python
+from apps.audit.models import AuditAction
+from apps.audit.services import audit_service
+
+# Crear
+audit_service.log(
+    organization=organization,
+    user=user,
+    entity_type="document",
+    entity_id=str(document.id),
+    action=AuditAction.CREATE,
+    new_values={"name": "report.pdf", "mime_type": "application/pdf"},
+)
+
+# Actualizar con old/new values
+audit_service.log(
+    organization=organization,
+    user=user,
+    entity_type="document",
+    entity_id=str(document.id),
+    action=AuditAction.UPDATE,
+    old_values={"name": "old.pdf"},
+    new_values={"name": "new.pdf"},
+)
+
+# Con request (captura IP y user-agent)
+audit_service.log(
+    organization=organization,
+    user=user,
+    entity_type="user",
+    entity_id=str(user.id),
+    action=AuditAction.LOGIN,
+    request=request,
+)
+```
+
+**Acciones disponibles:** `CREATE`, `UPDATE`, `DELETE`, `RESTORE`, `VIEW`, `DOWNLOAD`, `STATUS_CHANGE`, `LOGIN`, `LOGOUT`, `PERMISSION_DENIED`.
+
+**Regla:** `AuditLog` es inmutable. Nunca llamar `.save()` sobre un log existente ni `.delete()`. El modelo lanza `RuntimeError` si se intenta.

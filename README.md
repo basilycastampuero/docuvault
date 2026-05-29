@@ -59,10 +59,12 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env   # then fill in your values
 python manage.py migrate
+python manage.py init_storage   # creates MinIO bucket (idempotent)
 python manage.py runserver
 ```
 
 API running at `http://localhost:8000/api/v1/`
+Swagger UI at `http://localhost:8000/api/docs/`
 MinIO console at `http://localhost:9001`
 
 ## Development
@@ -71,18 +73,31 @@ MinIO console at `http://localhost:9001`
 # Run tests
 pytest
 
-# Format code
+# Format + lint
 black .
 isort .
-
-# Lint
 flake8
+
+# Celery worker (for async tasks)
+celery -A config.celery worker --loglevel=info
 ```
+
+See `docs/manual-testing.md` for step-by-step curl examples testing all features.
 
 ## Status
 
-Active development — Phase 1 (Auth + Organizations + RBAC + User management) complete.
-166 tests passing, 99% coverage.
+Active development — **Phase 2 complete.**
+
+| Phase | Scope | Status |
+|-------|-------|--------|
+| 0 | Setup (Docker, pre-commit, env) | ✅ Complete |
+| 1 | Auth + Organizations + RBAC + Users | ✅ Complete |
+| 2 | Document management + versioning + storage + audit | ✅ Complete |
+| 3 | Audit endpoints + Workflows + Full-text search | 🔜 Next |
+| 4 | Celery pipelines + OCR + AI analysis | 📅 Planned |
+| 5 | Frontend + Deploy + Observability | 📅 Planned |
+
+**286 tests passing, 98% coverage.**
 
 ---
 

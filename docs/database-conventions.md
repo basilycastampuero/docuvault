@@ -144,8 +144,11 @@ deleted_at      TIMESTAMPTZ
 INDEX: idx_documents_org_status ON (organization_id, status)
 INDEX: idx_documents_org_folder ON (organization_id, folder_id)
 INDEX: idx_documents_org_created ON (organization_id, created_at DESC)
-INDEX: idx_documents_search_vector_gin ON (search_vector) USING GIN
-INDEX: idx_documents_tags_gin ON (tags) USING GIN
+INDEX: idx_documents_org_checksum ON (organization_id, checksum)
+INDEX: idx_documents_search_vector_gin ON (search_vector) USING GIN  -- jsonb_path_ops para búsqueda de contenido
+INDEX: idx_documents_metadata_gin ON (metadata) USING GIN             -- jsonb_path_ops para queries de metadata
+INDEX: idx_documents_tags_gin ON (tags) USING GIN                     -- overlap queries con ArrayField
+UNIQUE: uq_documents_org_folder_name_alive ON (organization_id, folder_id, name) WHERE deleted_at IS NULL
 ```
 
 ### document_versions
@@ -153,15 +156,19 @@ INDEX: idx_documents_tags_gin ON (tags) USING GIN
 id              UUID PRIMARY KEY
 document_id     UUID NOT NULL REFERENCES documents(id)
 version_number  INTEGER NOT NULL
-storage_path    VARCHAR(1024) NOT NULL
+storage_path    VARCHAR(500) NOT NULL
 file_size       BIGINT NOT NULL
 checksum        VARCHAR(64) NOT NULL
+mime_type       VARCHAR(120) NOT NULL
 created_by_id   UUID NOT NULL REFERENCES users(id)
-change_description TEXT NOT NULL DEFAULT ''
+change_description VARCHAR(500) NOT NULL DEFAULT ''
 created_at      TIMESTAMPTZ NOT NULL
+updated_at      TIMESTAMPTZ NOT NULL
+deleted_at      TIMESTAMPTZ
 
-UNIQUE: uq_document_versions_doc_number ON (document_id, version_number)
-INDEX: idx_document_versions_document ON (document_id)
+UNIQUE: uq_document_versions_doc_version_alive ON (document_id, version_number) WHERE deleted_at IS NULL
+-- Nota: Django limita nombres de índices a 30 caracteres, por eso se abrevia:
+INDEX: idx_doc_versions_doc_version ON (document_id, version_number DESC)
 ```
 
 ### audit_logs
