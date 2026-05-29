@@ -49,3 +49,5 @@ IsSuperAdmin = HasRole(UserRole.SUPER_ADMIN)
 IsOrgAdmin = HasRole(UserRole.ORG_ADMIN, UserRole.SUPER_ADMIN)
 
 IsSuperAdminOrOrgAdmin = IsOrgAdmin  # alias for readability
+
+CanReadAuditLogs = HasRole(UserRole.AUDITOR, UserRole.ORG_ADMIN, UserRole.SUPER_ADMIN)

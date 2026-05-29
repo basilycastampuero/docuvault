@@ -562,77 +562,377 @@ Cobertura objetivo: mantener ≥ 95%.
 **Objetivo:** Sistema de auditoría completo, motor de workflows y búsqueda full-text.
 **Estimación:** 4–5 semanas
 
-### 3.1 App: audit — endpoints y filtros
+### 3.1 App: audit — endpoints y filtros (capa de lectura)
 
 > **Nota:** el modelo `AuditLog` y `audit_service.log()` ya se construyeron en Fase 2.1.
-> En esta fase se añade solo la capa de lectura (endpoints, filtros, permisos).
+> En esta fase se añade SOLO la capa de lectura (selector, serializer, endpoints,
+> filtros, permisos). El modelo no se toca.
+
+#### Decisiones cerradas (no re-discutir durante la implementación)
+
+1. **`django-filter` para los filtros** — ya está en `requirements.txt` (24.3) y
+   registrado como `DEFAULT_FILTER_BACKENDS` en `base.py`. Se usa un `FilterSet`
+   explícito, no filtrado manual en la view (a diferencia de `documents`, donde el
+   filtrado es manual por simplicidad). Razón: los filtros de auditoría son más ricos
+   (rangos de fecha) y `django-filter` ya está disponible.
+2. **PK entera, no UUID.** `AuditLog.id` es `BigAutoField`. La ruta de detalle usa
+   `<int:log_id>`, NO `<uuid:...>`.
+3. **API estrictamente de solo lectura.** Solo se exponen `GET`. No hay POST/PATCH/
+   DELETE. Las views heredan de `APIView` con un único método `get` (mismo patrón que
+   `documents`), no de un `ModelViewSet`.
+4. **Leer audit logs NO genera un audit log.** Evita ruido infinito y crecimiento
+   descontrolado de la tabla. El acceso de lectura a la auditoría no se audita.
+5. **Permiso nuevo `CanReadAuditLogs`.** Se construye con el factory existente:
+   `HasRole("auditor", "org_admin", "super_admin")`. Se combina con
+   `IsOrganizationMember` en `permission_classes`. No se inventa lógica ad-hoc en la
+   view.
+
+#### Archivos a crear
 
 ```
-Endpoints:
-    GET /api/v1/audit-logs/    → listar con filtros (entity_type, action, user, date_range)
-    GET /api/v1/audit-logs/{id}/
+apps/audit/selectors/__init__.py
+apps/audit/selectors/audit_log_selector.py
+    get_logs(organization) → QuerySet[AuditLog]
+        Document.objects.filter(organization=organization).select_related("user")
+        # ordering ya viene de Meta.ordering = ["-created_at"]; el FilterSet aplica el resto
+    get_log_by_id(organization, log_id) → AuditLog   (NotFound si no es de la org)
 
-Filtros via django-filter:
-    - entity_type, entity_id
-    - action
-    - user (FK id)
-    - created_at__gte, created_at__lte
+apps/audit/api/__init__.py
+apps/audit/api/filters.py
+    class AuditLogFilter(django_filters.FilterSet):
+        action        = filtro exacto (choices de AuditAction)
+        entity_type   = filtro exacto
+        entity_id     = filtro exacto
+        user          = filtro por FK id
+        created_after  = DateTimeFilter(field_name="created_at", lookup_expr="gte")
+        created_before = DateTimeFilter(field_name="created_at", lookup_expr="lte")
 
-AuditLogSelector:
-    get_logs(organization, **filters) → QuerySet
-    get_log_by_id(organization, log_id) → AuditLog
+apps/audit/api/serializers.py
+    AuditLogSerializer (read-only):
+        id, action, entity_type, entity_id, old_values, new_values,
+        ip_address, user_agent, metadata, created_at,
+        user → anidado mínimo (id, email) o user_id + user_email (SerializerMethodField)
 
-Permisos: solo AUDITOR, ORG_ADMIN, SUPER_ADMIN pueden leer audit logs.
-Los logs siguen siendo inmutables: la API no expone POST/PATCH/DELETE.
+apps/audit/api/views.py
+    AuditLogListView(APIView)   GET   permission_classes = [IsOrganizationMember, CanReadAuditLogs]
+        - aplica AuditLogFilter sobre get_logs(organization)
+        - StandardPagination + envelope {data, meta}
+        - @extend_schema con tags=["Audit"]
+    AuditLogDetailView(APIView) GET   mismos permisos
+        - get_log_by_id(organization, log_id) → envelope {data}
+
+apps/audit/api/urls.py
+    path("audit-logs/", AuditLogListView.as_view(), name="audit-log-list")
+    path("audit-logs/<int:log_id>/", AuditLogDetailView.as_view(), name="audit-log-detail")
+
+apps/permissions/permissions.py
+    CanReadAuditLogs = HasRole(UserRole.AUDITOR, UserRole.ORG_ADMIN, UserRole.SUPER_ADMIN)
+```
+
+#### Wiring
+
+```
+config/api_urls.py → añadir:  path("", include("apps.audit.api.urls"))
+                              (las rutas ya empiezan con "audit-logs/")
+```
+
+#### Tests (~14)
+
+```
+test_audit_log_selector.py (~4):
+    - get_logs filtra por organization (tenant isolation: org A no ve logs de org B)
+    - get_logs aplica select_related("user") → N+1 controlado (assertNumQueries)
+    - get_log_by_id devuelve el log de la org
+    - get_log_by_id de otra org → NotFound
+
+test_audit_api.py (~10):
+    - auditor lista logs → 200, envelope correcto, paginado
+    - org_admin lista → 200
+    - editor/viewer → 403
+    - no autenticado → 401
+    - filtro por action → solo devuelve esa acción
+    - filtro por entity_type + entity_id
+    - filtro por rango de fechas (created_after / created_before)
+    - filtro por user
+    - detalle por id → 200
+    - POST/PATCH/DELETE → 405 (método no permitido)
+    - tenant isolation: auditor de org A no ve log de org B (404 en detalle)
+```
+
+#### Entregable 3.1
+- [ ] Endpoints `GET /api/v1/audit-logs/` y `/{id}/` operativos con envelope
+- [ ] Filtros por action, entity, user y rango de fechas vía `django-filter`
+- [ ] Solo AUDITOR/ORG_ADMIN/SUPER_ADMIN pueden leer; resto 403
+- [ ] API de solo lectura (sin POST/PATCH/DELETE)
+- [ ] drf-spectacular sigue en 0 errors / 0 warnings
+- [ ] Tests de filtros, permisos y aislamiento de tenant en verde
+
+Commits sugeridos:
+```
+feat(permissions): add CanReadAuditLogs role permission
+feat(audit): add AuditLogSelector and read-only API with filters
+test(audit): add tests for audit log selector and API
 ```
 
 ### 3.2 App: workflows
 
+> Esta sub-fase **desbloquea las transiciones `approved`/`rejected`** de
+> `Document.status` que la Fase 2 dejó bloqueadas a propósito. Hoy
+> `document_service.change_document_status` solo permite `draft ↔ under_review` y
+> lanza `ConflictError` para el resto. El motor de workflows es la ÚNICA vía
+> privilegiada hacia `approved`/`rejected`.
+
+#### Pre-flight
+
 ```
-Modelos:
+- Registrar "apps.workflows" en INSTALLED_APPS (base.py) — hoy es un skeleton vacío
+- Crear estructura: models/, services/, selectors/, api/, tasks/ (vacío por ahora), tests/
+```
 
-WorkflowTemplate
-    organization: FK
-    name: str
-    description: str
-    is_active: bool
-    config: JSONB (configuración del flujo)
+#### Decisiones cerradas (no re-discutir durante la implementación)
 
-WorkflowStep
-    template: FK → WorkflowTemplate
-    name: str
-    order: int
-    required_role: TextChoices (quién puede completar este paso)
-    is_final: bool
-    actions: JSONB (qué hace al completarse: notificar, cambiar estado, etc.)
+1. **Todos los modelos heredan de `BaseModel`** (UUID + soft delete), incluido
+   `WorkflowStepLog`. Aunque `WorkflowStepLog` es append-only por convención (el service
+   nunca lo actualiza), NO se replica el patrón inmutable de `AuditLog`: es dato de
+   dominio, no la bitácora de auditoría. CLAUDE.md §5 obliga `BaseModel`.
+2. **Workflows escribe `Document.status` directamente, NO vía `change_document_status`.**
+   El guard de transiciones manuales de Fase 2 sigue intacto para la API normal. El
+   `workflow_service` setea `document.status = APPROVED/REJECTED` con su propio
+   `save(update_fields=...)` + `audit_service.log(STATUS_CHANGE)`. Documentar con un
+   comentario por qué se omite el guard.
+3. **Un documento solo puede tener UNA ejecución activa a la vez** (status
+   `pending`/`in_progress`). Iniciar una segunda → `ConflictError`.
+4. **`required_role` por paso** usa los mismos valores de `UserRole`. Quien avanza un
+   paso debe tener exactamente ese rol (o ser ORG_ADMIN/SUPER_ADMIN, que pueden todo).
+   La validación va en el service, no en la view.
+5. **`config`/`actions` (JSONB) se reservan para Fase 4** (notificaciones, side-effects
+   automáticos). En Fase 3.2 se persisten pero NO se interpretan. Default `dict`.
+6. **`reject_workflow` se implementa como `advance_step(action=REJECTED)`**, no como
+   método separado, para no duplicar lógica. Se expone igual en un endpoint claro.
 
-WorkflowExecution
-    organization: FK
-    template: FK → WorkflowTemplate
-    document: FK → Document
-    current_step: FK → WorkflowStep
-    status: TextChoices (pending, in_progress, completed, rejected, cancelled)
-    started_by: FK → User
-    started_at: datetime
-    completed_at: datetime (null)
+#### Modelos (`apps/workflows/models/`)
 
-WorkflowStepLog
-    execution: FK → WorkflowExecution
-    step: FK → WorkflowStep
-    action: TextChoices (approved, rejected, commented)
-    performed_by: FK → User
-    comment: str
-    performed_at: datetime
+```python
+# enums.py
+class WorkflowStatus(TextChoices):
+    PENDING, IN_PROGRESS, COMPLETED, REJECTED, CANCELLED
 
-Flujo ejemplo:
-    Draft → Under Review → Approved → Archived
-                        ↓
-                    Rejected → Draft
+class WorkflowStepAction(TextChoices):
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    COMMENTED = "commented"
 
-WorkflowService:
-    start_workflow(organization, user, document, template) → WorkflowExecution
-    advance_step(organization, user, execution, action, comment) → WorkflowExecution
-    reject_workflow(organization, user, execution, reason) → WorkflowExecution
+WorkflowTemplate(BaseModel):
+    organization FK → Organization (CASCADE, related_name="workflow_templates")
+    name         CharField(255)
+    description  TextField(blank=True)
+    is_active    BooleanField(default=True)
+    config       JSONField(default=dict, blank=True)
+    Meta:
+        db_table = "workflow_templates"
+        indexes: idx_wf_templates_org_active (organization, is_active)
+        constraints: uq_wf_templates_org_name_alive (org, name) WHERE deleted_at IS NULL
+
+WorkflowStep(BaseModel):
+    template       FK → WorkflowTemplate (CASCADE, related_name="steps")
+    name           CharField(255)
+    order          PositiveIntegerField()
+    required_role  CharField(choices=UserRole.choices)
+    is_final       BooleanField(default=False)
+    actions        JSONField(default=dict, blank=True)
+    Meta:
+        db_table = "workflow_steps"
+        ordering = ["order"]
+        indexes: idx_wf_steps_template_order (template, order)
+        constraints: uq_wf_steps_template_order_alive (template, order) WHERE alive
+
+WorkflowExecution(BaseModel):
+    organization FK → Organization (CASCADE, related_name="workflow_executions")
+    template     FK → WorkflowTemplate (PROTECT, related_name="executions")
+    document     FK → Document (CASCADE, related_name="workflow_executions")
+    current_step FK → WorkflowStep (SET_NULL, null=True, blank=True)
+    status       CharField(choices=WorkflowStatus, default=PENDING)
+    started_by   FK → User (PROTECT, related_name="started_workflows")
+    started_at   DateTimeField(null=True, blank=True)
+    completed_at DateTimeField(null=True, blank=True)
+    Meta:
+        db_table = "workflow_executions"
+        indexes:
+            idx_wf_exec_org_status   (organization, status)
+            idx_wf_exec_org_document (organization, document)
+            idx_wf_exec_org_created  (organization, -created_at)
+        # Una sola ejecución activa por documento se valida en el service
+        # (constraint parcial con dos valores de status no es trivial; va en service).
+
+WorkflowStepLog(BaseModel):
+    execution    FK → WorkflowExecution (CASCADE, related_name="step_logs")
+    step         FK → WorkflowStep (PROTECT)
+    action       CharField(choices=WorkflowStepAction)
+    performed_by FK → User (PROTECT, related_name="workflow_actions")
+    comment      TextField(blank=True)
+    Meta:
+        db_table = "workflow_step_logs"
+        ordering = ["created_at"]
+        indexes: idx_wf_step_logs_exec_created (execution, created_at)
+```
+
+> Nota nombres de índice: Django limita a 30 chars; por eso `wf_` y abreviaturas.
+
+#### Service (`apps/workflows/services/workflow_service.py`)
+
+```python
+@transaction.atomic
+create_template(organization, user, name, description="", steps=[...]) → WorkflowTemplate
+    - crea template + sus WorkflowStep en orden (valida al menos 1 paso, exactamente 1 is_final)
+    - valida orders únicos y consecutivos
+    - audit CREATE
+
+@transaction.atomic
+start_workflow(organization, user, document, template) → WorkflowExecution
+    1. valida template.organization == organization y document.organization == organization
+    2. valida template.is_active (si no → ConflictError)
+    3. valida que document NO tenga ejecución activa (pending/in_progress) → ConflictError
+    4. first_step = template.steps.order_by("order").first()
+    5. crea WorkflowExecution(status=IN_PROGRESS, current_step=first_step, started_at=now)
+    6. document.status → UNDER_REVIEW (escritura directa + audit STATUS_CHANGE)
+    7. audit CREATE sobre la ejecución
+    8. (Fase 4: transaction.on_commit → notificar al responsable del primer paso)
+
+@transaction.atomic
+advance_step(organization, user, execution, action, comment="") → WorkflowExecution
+    1. valida execution.organization == organization
+    2. valida execution.status == IN_PROGRESS (si no → ConflictError)
+    3. valida rol: user.role == current_step.required_role o user es ORG_ADMIN/SUPER_ADMIN
+       (si no → PermissionDenied)
+    4. crea WorkflowStepLog(step=current_step, action, performed_by=user, comment)
+    5. si action == REJECTED:
+        execution.status = REJECTED, completed_at = now, current_step = None
+        document.status → REJECTED (escritura directa + audit)
+    6. si action == APPROVED:
+        si current_step.is_final:
+            execution.status = COMPLETED, completed_at = now, current_step = None
+            document.status → APPROVED (escritura directa + audit)
+        si no:
+            current_step = siguiente paso por order
+            (sigue IN_PROGRESS)
+    7. si action == COMMENTED: solo registra el log, no cambia estado
+    8. audit UPDATE/STATUS_CHANGE sobre la ejecución
+
+reject_workflow(organization, user, execution, reason) → WorkflowExecution
+    # azúcar sintáctico → advance_step(action=REJECTED, comment=reason)
+
+@transaction.atomic
+cancel_workflow(organization, user, execution) → WorkflowExecution
+    - solo started_by o ORG_ADMIN+; execution.status → CANCELLED
+    - el documento vuelve a DRAFT (escritura directa + audit)
+```
+
+#### Selector (`apps/workflows/selectors/workflow_selector.py`)
+
+```python
+get_templates(organization) → QuerySet[WorkflowTemplate]      # prefetch_related("steps")
+get_template_by_id(organization, template_id) → WorkflowTemplate
+get_executions(organization, document=None, status=None) → QuerySet[WorkflowExecution]
+    .select_related("template", "document", "current_step", "started_by")
+get_execution_by_id(organization, execution_id) → WorkflowExecution
+get_step_logs(organization, execution) → QuerySet[WorkflowStepLog]
+    .select_related("step", "performed_by")
+```
+
+#### API REST (`apps/workflows/api/`)
+
+```
+# Templates (gestión: OrgAdmin+ para escritura, cualquier miembro lee)
+GET, POST           /api/v1/workflows/templates/
+GET, PATCH, DELETE  /api/v1/workflows/templates/<uuid:template_id>/
+
+# Executions
+GET                 /api/v1/workflows/executions/             (filtros: document, status)
+POST                /api/v1/workflows/executions/             (= start_workflow; Editor+)
+GET                 /api/v1/workflows/executions/<uuid:execution_id>/
+POST                /api/v1/workflows/executions/<uuid:execution_id>/advance/   (action+comment)
+GET                 /api/v1/workflows/executions/<uuid:execution_id>/logs/
+
+Serializers:
+    WorkflowTemplateSerializer (read; steps anidados)
+    WorkflowTemplateCreateSerializer (write; name, description, steps[])
+    WorkflowStepSerializer
+    WorkflowExecutionSerializer (read; template/document/current_step anidados)
+    WorkflowStartSerializer (write; document_id, template_id)
+    WorkflowAdvanceSerializer (write; action ∈ {approved,rejected,commented}, comment)
+    WorkflowStepLogSerializer
+
+Permisos:
+    Templates escritura → IsOrganizationMember + HasRole(org_admin, super_admin)
+    Start execution     → IsOrganizationMember + HasRole(editor, supervisor, org_admin, super_admin)
+    Advance step        → IsOrganizationMember (el rol del paso se valida en el service)
+    Lecturas            → IsOrganizationMember
+
+Wiring: config/api_urls.py → path("workflows/", include("apps.workflows.api.urls"))
+Todas las views con @extend_schema. drf-spectacular debe seguir en 0 warnings.
+```
+
+#### Flujo ejemplo
+
+```
+Draft ──start_workflow──▶ Under Review ──approve (final)──▶ Approved
+                              │
+                              └── reject ──▶ Rejected
+                              └── cancel ──▶ Draft (execution CANCELLED)
+```
+
+#### Tests (~35)
+
+```
+test_models.py (~6):
+    constraints (order único por template, name único por org alive),
+    ordering de steps por order, ordering de step_logs por created_at, tenant.
+
+test_workflow_service.py (~18):
+    - create_template: crea template + steps en orden; rechaza sin is_final; rechaza orders duplicados
+    - start_workflow happy path: execution IN_PROGRESS, current_step = primero, document → under_review
+    - start con template inactivo → ConflictError
+    - start con template de otra org → PermissionDenied/Error
+    - start con ejecución activa existente → ConflictError
+    - advance approve paso NO final → avanza al siguiente step, sigue in_progress
+    - advance approve paso final → execution COMPLETED, document → APPROVED
+    - advance reject → execution REJECTED, document → REJECTED
+    - advance con rol incorrecto → PermissionDenied
+    - advance con org_admin (override de rol) → permitido
+    - advance sobre execution ya completada → ConflictError
+    - cancel_workflow → CANCELLED, document → DRAFT
+    - **document llega a approved/rejected SOLO vía workflow** (verificar que la API
+      manual sigue lanzando ConflictError)
+    - cada transición genera audit log
+    - tenant isolation
+
+test_workflow_selector.py (~5):
+    N+1 en get_executions (assertNumQueries), tenant isolation, prefetch de steps.
+
+test_workflow_api.py (~6+):
+    permisos por rol, envelope, flujo completo start→advance→complete vía HTTP,
+    advance por usuario sin rol → 403, tenant isolation.
+```
+
+#### Entregable 3.2
+- [ ] 4 modelos (`WorkflowTemplate`, `WorkflowStep`, `WorkflowExecution`, `WorkflowStepLog`) con índices
+- [ ] `apps.workflows` registrado en INSTALLED_APPS; migración revisada a mano
+- [ ] `workflow_service`: create_template, start, advance, reject, cancel
+- [ ] Transiciones `approved`/`rejected` de `Document` funcionando SOLO vía workflow
+- [ ] El guard manual de Fase 2 (`change_document_status`) sigue rechazando approved/rejected
+- [ ] Endpoints REST con RBAC y validación de rol por paso
+- [ ] Todas las transiciones auditadas vía `audit_service.log`
+- [ ] Tests de service, selector y API en verde; tenant isolation explícito
+- [ ] drf-spectacular en 0 errors / 0 warnings
+
+Commits sugeridos:
+```
+chore(workflows): register app and create package structure
+feat(workflows): add WorkflowTemplate/Step/Execution/StepLog models with indexes
+feat(workflows): add workflow_service (start, advance, reject, cancel)
+feat(workflows): add workflow_selector with N+1-safe querysets
+feat(workflows): add REST endpoints with role-per-step validation
+test(workflows): add model, service, selector and API tests
 ```
 
 ### 3.3 Full Text Search

@@ -734,7 +734,10 @@ fix/{name}    ← Corrección de bugs
 - [x] drf-spectacular configurado y operativo (0 errors / 0 warnings)
 - [x] Documentación API (Swagger UI en `/api/docs/`, Redoc en `/api/redoc/`)
 
-**Métricas:** 285 tests pasando, cobertura 98%.
+**Métricas:** 286 tests pasando, cobertura 98% (auditado 2026-05-29 con la
+infraestructura Docker levantada). Nota: los tests requieren PostgreSQL real corriendo
+(`docker compose up -d`); si falla con `connection refused` en `localhost:5432`, la
+infra está apagada — no es un fallo de código.
 
 **Apps activas en INSTALLED_APPS:**
 `apps.core`, `apps.organizations`, `apps.authentication`, `apps.permissions`,
@@ -750,8 +753,16 @@ fix/{name}    ← Corrección de bugs
 4. Tarea `process_ocr` existe como stub vacío; cuerpo real en Fase 4.2.
 5. El blob en MinIO NO se borra al soft-delete un documento. Cleanup en Fase 4.
 
-**Próximo paso:** Fase 3 — Auditoría avanzada (endpoints/filtros de AuditLog),
-Workflows (WorkflowTemplate + WorkflowExecution), Full-Text Search.
+**Próximo paso:** Fase 3.1 — Capa de lectura de auditoría (selector + endpoints
+`GET /api/v1/audit-logs/` con filtros `django-filter`, permiso `CanReadAuditLogs`,
+solo AUDITOR/ORG_ADMIN/SUPER_ADMIN). Luego 3.2 — Workflows y 3.3 — FTS.
+
+El plan detallado y decision-locked de Fase 3.1 y 3.2 (desglose archivo por archivo,
+decisiones cerradas, tests) está en `docs/phase-plan.md` §3.1 y §3.2. Puntos clave:
+- 3.1 usa `django-filter` (ya instalado), API solo-lectura, PK entera (`<int:log_id>`).
+- 3.2 desbloquea las transiciones `approved`/`rejected` de `Document.status` que la
+  Fase 2 bloqueó: el `workflow_service` escribe el status directamente (no vía
+  `change_document_status`), y un documento solo puede tener una ejecución activa.
 
 Ver `docs/phase-plan.md` para el plan completo de desarrollo.
 
