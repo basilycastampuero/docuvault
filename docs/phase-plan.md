@@ -315,7 +315,9 @@ DocumentVersion (hereda BaseModel):
         db_table = "document_versions"
         ordering = ["-version_number"]
         indexes:
-            idx_document_versions_doc_version    (document, -version_number)
+            idx_doc_versions_doc_version    (document, -version_number)
+            # Nota: Django limita nombres de índices a 30 caracteres, por eso
+            # se abrevia "document_versions" a "doc_versions".
         constraints:
             uq_document_versions_doc_version_alive
 

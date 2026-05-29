@@ -113,6 +113,18 @@ class TestCreateDocument:
             )
             mock_delay.assert_called_once_with(str(doc.id))
 
+    def test_storage_upload_failure_rolls_back_document(self, mock_storage):
+        """If storage.upload_file raises mid-transaction, no Document persists."""
+        mock_storage.upload_file.side_effect = RuntimeError("S3 timeout")
+        org = OrganizationFactory()
+        user = UserFactory(organization=org)
+        with pytest.raises(RuntimeError):
+            create_document(
+                organization=org, user=user, file=_pdf_file(), name="fail.pdf"
+            )
+        assert Document.objects.filter(organization=org).count() == 0
+        assert DocumentVersion.objects.count() == 0
+
 
 @pytest.mark.django_db(transaction=True)
 class TestUploadNewVersion:
