@@ -42,7 +42,7 @@ LOCAL_APPS: list[str] = [
     "apps.permissions",
     "apps.audit",
     "apps.documents",
-    # "apps.workflows",
+    "apps.workflows",
     # "apps.notifications",
     # "apps.search",
 ]
@@ -169,6 +169,12 @@ SPECTACULAR_SETTINGS = {
     "SERVE_INCLUDE_SCHEMA": False,
     "COMPONENT_SPLIT_REQUEST": True,
     "SCHEMA_PATH_PREFIX": r"/api/v1",
+    # Disambiguate choice sets that share a field name or are reused across fields.
+    "ENUM_NAME_OVERRIDES": {
+        "AuditActionEnum": "apps.audit.models.AuditAction.choices",
+        "WorkflowStepActionEnum": "apps.workflows.models.WorkflowStepAction.choices",
+        "UserRoleEnum": "apps.authentication.models.UserRole.choices",
+    },
 }
 
 # ---------------------------------------------------------------------------
