@@ -659,13 +659,13 @@ test_audit_api.py (~10):
     - tenant isolation: auditor de org A no ve log de org B (404 en detalle)
 ```
 
-#### Entregable 3.1
-- [ ] Endpoints `GET /api/v1/audit-logs/` y `/{id}/` operativos con envelope
-- [ ] Filtros por action, entity, user y rango de fechas vía `django-filter`
-- [ ] Solo AUDITOR/ORG_ADMIN/SUPER_ADMIN pueden leer; resto 403
-- [ ] API de solo lectura (sin POST/PATCH/DELETE)
-- [ ] drf-spectacular sigue en 0 errors / 0 warnings
-- [ ] Tests de filtros, permisos y aislamiento de tenant en verde
+#### Entregable 3.1 — ✅ COMPLETADO (2026-05-30, commit 9279819)
+- [x] Endpoints `GET /api/v1/audit-logs/` y `/{id}/` operativos con envelope
+- [x] Filtros por action, entity, user y rango de fechas vía `django-filter`
+- [x] Solo AUDITOR/ORG_ADMIN/SUPER_ADMIN pueden leer; resto 403
+- [x] API de solo lectura (sin POST/PATCH/DELETE → 405)
+- [x] drf-spectacular sigue en 0 errors / 0 warnings
+- [x] Tests de filtros, permisos y aislamiento de tenant en verde (26 tests)
 
 Commits sugeridos:
 ```
@@ -914,16 +914,16 @@ test_workflow_api.py (~6+):
     advance por usuario sin rol → 403, tenant isolation.
 ```
 
-#### Entregable 3.2
-- [ ] 4 modelos (`WorkflowTemplate`, `WorkflowStep`, `WorkflowExecution`, `WorkflowStepLog`) con índices
-- [ ] `apps.workflows` registrado en INSTALLED_APPS; migración revisada a mano
-- [ ] `workflow_service`: create_template, start, advance, reject, cancel
-- [ ] Transiciones `approved`/`rejected` de `Document` funcionando SOLO vía workflow
-- [ ] El guard manual de Fase 2 (`change_document_status`) sigue rechazando approved/rejected
-- [ ] Endpoints REST con RBAC y validación de rol por paso
-- [ ] Todas las transiciones auditadas vía `audit_service.log`
-- [ ] Tests de service, selector y API en verde; tenant isolation explícito
-- [ ] drf-spectacular en 0 errors / 0 warnings
+#### Entregable 3.2 — ✅ COMPLETADO (2026-05-30, commit b80a43e)
+- [x] 4 modelos (`WorkflowTemplate`, `WorkflowStep`, `WorkflowExecution`, `WorkflowStepLog`) con índices
+- [x] `apps.workflows` registrado en INSTALLED_APPS; migración revisada a mano
+- [x] `workflow_service`: create_template, update_template, soft_delete_template, start, advance, reject, cancel
+- [x] Transiciones `approved`/`rejected` de `Document` funcionando SOLO vía workflow
+- [x] El guard manual de Fase 2 (`change_document_status`) sigue rechazando approved/rejected
+- [x] Endpoints REST con RBAC y validación de rol por paso
+- [x] Todas las transiciones auditadas vía `audit_service.log`
+- [x] Tests de service, selector y API en verde; tenant isolation explícito (62 tests)
+- [x] drf-spectacular en 0 errors / 0 warnings (vía `ENUM_NAME_OVERRIDES`)
 
 Commits sugeridos:
 ```

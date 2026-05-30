@@ -695,7 +695,7 @@ fix/{name}    ← Corrección de bugs
 
 ## 17. Estado actual del proyecto
 
-**Fase actual:** 3 — Auditoría avanzada + Workflows + FTS (próxima a iniciar)
+**Fase actual:** 3.3 — Full-Text Search (próxima a iniciar). Fases 3.1 y 3.2 completas.
 
 **Completado:**
 - [x] **Fase 0** — Setup completo: WSL2, Docker Compose (PG16 + Redis7 + MinIO),
@@ -731,17 +731,31 @@ fix/{name}    ← Corrección de bugs
 - [x] **Fase 2.6** — REST endpoints `/api/v1/folders/` y `/api/v1/documents/`
       con RBAC (Editor+ para escrituras, cualquier miembro para lecturas),
       envelope `{data, meta}`, paginación, serializers separados por operación
+- [x] **Fase 3.1** — Capa de lectura de auditoría: `AuditLogSelector`,
+      `AuditLogFilter` (django-filter: action, entity_type, entity_id, user, rango de
+      fechas), API solo-lectura `GET /api/v1/audit-logs/` y `/{id}/` (PK entera
+      `<int:log_id>`), permiso `CanReadAuditLogs` (auditor/org_admin/super_admin).
+      Leer logs no se audita. POST/PATCH/DELETE → 405.
+- [x] **Fase 3.2** — Motor de Workflows: modelos `WorkflowTemplate`, `WorkflowStep`,
+      `WorkflowExecution`, `WorkflowStepLog` (todos BaseModel); `workflow_service`
+      (create/update/soft_delete template, start, advance approve/reject/comment,
+      reject, cancel); `WorkflowSelector` (N+1-safe); API `/api/v1/workflows/`
+      (templates + executions + advance + logs). **Desbloquea `approved`/`rejected`
+      de `Document.status`**: el workflow escribe el status directamente (el guard
+      manual de `change_document_status` de Fase 2 sigue intacto). Validación de rol
+      por paso en el service. Una sola ejecución activa por documento.
+      `ENUM_NAME_OVERRIDES` añadido para mantener drf-spectacular en 0 warnings.
 - [x] drf-spectacular configurado y operativo (0 errors / 0 warnings)
 - [x] Documentación API (Swagger UI en `/api/docs/`, Redoc en `/api/redoc/`)
 
-**Métricas:** 286 tests pasando, cobertura 98% (auditado 2026-05-29 con la
-infraestructura Docker levantada). Nota: los tests requieren PostgreSQL real corriendo
-(`docker compose up -d`); si falla con `connection refused` en `localhost:5432`, la
-infra está apagada — no es un fallo de código.
+**Métricas:** 370 tests pasando, cobertura 98% (Fase 3.2 completa, 2026-05-30).
+Nota: los tests requieren PostgreSQL real corriendo (`docker compose up -d`); si falla
+con `connection refused` en `localhost:5432`, la infra está apagada — no es un fallo
+de código.
 
 **Apps activas en INSTALLED_APPS:**
 `apps.core`, `apps.organizations`, `apps.authentication`, `apps.permissions`,
-`apps.audit`, `apps.documents`
+`apps.audit`, `apps.documents`, `apps.workflows`
 
 **Decisiones de diseño cerradas de Fase 2 (ya implementadas, no re-discutir):**
 1. `AuditLog` usa `BigAutoField` (no UUID) y NO hereda `BaseModel` — inmutable,
@@ -749,20 +763,28 @@ infra está apagada — no es un fallo de código.
 2. Tests de `StorageService` son mockeados (boto3 via monkeypatch). Integración
    real con MinIO se añade en Fase 4.
 3. `Document.status` acepta 5 valores pero solo `draft ↔ under_review` se permiten
-   manualmente. `approved`/`rejected` requieren `WorkflowExecution` (Fase 3.2).
+   manualmente. `approved`/`rejected` se habilitan vía `WorkflowExecution` (Fase 3.2,
+   ya implementado).
 4. Tarea `process_ocr` existe como stub vacío; cuerpo real en Fase 4.2.
 5. El blob en MinIO NO se borra al soft-delete un documento. Cleanup en Fase 4.
 
-**Próximo paso:** Fase 3.1 — Capa de lectura de auditoría (selector + endpoints
-`GET /api/v1/audit-logs/` con filtros `django-filter`, permiso `CanReadAuditLogs`,
-solo AUDITOR/ORG_ADMIN/SUPER_ADMIN). Luego 3.2 — Workflows y 3.3 — FTS.
+**Decisiones de diseño cerradas de Fase 3 (ya implementadas, no re-discutir):**
+6. API de auditoría es solo-lectura; leer audit logs NO genera un audit log.
+7. Modelos de workflows heredan `BaseModel` (incluido `WorkflowStepLog`); NO se
+   replica el patrón inmutable de `AuditLog` — son dato de dominio.
+8. `workflow_service` escribe `Document.status` directamente (helper
+   `_set_document_status`), saltándose el guard manual de `change_document_status`.
+   Es la ÚNICA vía privilegiada a `approved`/`rejected`. El guard manual sigue intacto.
+9. Un documento solo puede tener UNA ejecución activa (`pending`/`in_progress`) a la
+   vez. El rol requerido por paso se valida en el service; ORG_ADMIN/SUPER_ADMIN
+   pueden actuar sobre cualquier paso (override).
+10. `config`/`actions` (JSONB en template/step) se persisten pero NO se interpretan
+    hasta Fase 4 (notificaciones, side-effects automáticos).
 
-El plan detallado y decision-locked de Fase 3.1 y 3.2 (desglose archivo por archivo,
-decisiones cerradas, tests) está en `docs/phase-plan.md` §3.1 y §3.2. Puntos clave:
-- 3.1 usa `django-filter` (ya instalado), API solo-lectura, PK entera (`<int:log_id>`).
-- 3.2 desbloquea las transiciones `approved`/`rejected` de `Document.status` que la
-  Fase 2 bloqueó: el `workflow_service` escribe el status directamente (no vía
-  `change_document_status`), y un documento solo puede tener una ejecución activa.
+**Próximo paso:** Fase 3.3 — Full-Text Search con PostgreSQL nativo: poblar
+`Document.search_vector` (signal/trigger), índice GIN ya existe, `SearchSelector` con
+`SearchQuery`/`SearchRank`, endpoint `GET /api/v1/search/?q=...`. Ver `docs/phase-plan.md`
+§3.3. La app `apps.search` ya existe como skeleton vacío.
 
 Ver `docs/phase-plan.md` para el plan completo de desarrollo.
 
