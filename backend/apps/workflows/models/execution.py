@@ -57,6 +57,19 @@ class WorkflowExecution(BaseModel):
                 name="idx_wf_exec_org_created",
             ),
         ]
+        constraints = [
+            # Enforce "one active execution per document" at the DB level.
+            # The service still does a friendly .exists() check, but this
+            # partial unique index is what makes the rule race-proof.
+            models.UniqueConstraint(
+                fields=["document"],
+                condition=models.Q(
+                    status__in=["pending", "in_progress"],
+                    deleted_at__isnull=True,
+                ),
+                name="uq_wf_exec_one_active_per_document",
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"Execution {self.id} ({self.status})"

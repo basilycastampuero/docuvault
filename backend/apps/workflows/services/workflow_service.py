@@ -1,7 +1,7 @@
 import logging
 from typing import TYPE_CHECKING
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from apps.audit.models import AuditAction
@@ -202,15 +202,26 @@ def start_workflow(
             code="WORKFLOW_NO_STEPS",
         )
 
-    execution = WorkflowExecution.objects.create(
-        organization=organization,
-        template=template,
-        document=document,
-        current_step=first_step,
-        status=WorkflowStatus.IN_PROGRESS,
-        started_by=user,
-        started_at=timezone.now(),
-    )
+    # The .exists() check above is a fast, friendly path. The partial unique
+    # constraint uq_wf_exec_one_active_per_document is the race-proof backstop:
+    # if two requests pass the check concurrently, the DB rejects the loser and
+    # we surface a clean 409 instead of a second active execution.
+    try:
+        with transaction.atomic():
+            execution = WorkflowExecution.objects.create(
+                organization=organization,
+                template=template,
+                document=document,
+                current_step=first_step,
+                status=WorkflowStatus.IN_PROGRESS,
+                started_by=user,
+                started_at=timezone.now(),
+            )
+    except IntegrityError:
+        raise ConflictError(
+            message="This document already has an active workflow execution.",
+            code="WORKFLOW_ALREADY_ACTIVE",
+        )
 
     _set_document_status(organization, user, document, DocumentStatus.UNDER_REVIEW)
 
@@ -250,6 +261,17 @@ def advance_step(
     """
     if execution.organization_id != organization.pk:
         raise PermissionDenied("Execution does not belong to this organization.")
+
+    # Lock the execution row so two concurrent approvers cannot both read
+    # IN_PROGRESS and double-advance. The status is then re-read under the lock.
+    # of=("self",) locks only the execution row: current_step is a nullable FK
+    # (LEFT JOIN) and Postgres forbids FOR UPDATE on the nullable side of a join.
+    execution = (
+        WorkflowExecution.objects.select_for_update(of=("self",))
+        .select_related("template", "document", "current_step")
+        .get(pk=execution.pk)
+    )
+
     if execution.status != WorkflowStatus.IN_PROGRESS:
         raise ConflictError(
             message=f"Cannot advance an execution in status '{execution.status}'.",

@@ -1,4 +1,5 @@
 import pytest
+from django.db import IntegrityError, transaction
 
 from apps.audit.models import AuditAction, AuditLog
 from apps.authentication.models import UserRole
@@ -8,7 +9,7 @@ from apps.documents.models import DocumentStatus
 from apps.documents.services import document_service
 from apps.documents.tests.factories import DocumentFactory
 from apps.organizations.tests.factories import OrganizationFactory
-from apps.workflows.models import WorkflowStatus, WorkflowStepAction
+from apps.workflows.models import WorkflowExecution, WorkflowStatus, WorkflowStepAction
 from apps.workflows.services import workflow_service
 
 
@@ -172,6 +173,38 @@ class TestStartWorkflow:
                 user=admin_a,
                 document=document_b,
                 template=template_a,
+            )
+
+    def test_db_constraint_blocks_second_active_execution(self):
+        """
+        The partial unique constraint is the race-proof backstop: even when the
+        service's .exists() guard is bypassed, the DB refuses a second active
+        execution for the same document.
+        """
+        org = OrganizationFactory()
+        admin = UserFactory(organization=org, role=UserRole.ORG_ADMIN)
+        template = _two_step_template(org, admin)
+        document = DocumentFactory(organization=org, created_by=admin)
+        first_step = template.steps.order_by("order").first()
+        WorkflowExecution.objects.create(
+            organization=org,
+            template=template,
+            document=document,
+            current_step=first_step,
+            status=WorkflowStatus.IN_PROGRESS,
+            started_by=admin,
+        )
+
+        # Wrap in a savepoint so the IntegrityError only rolls back this insert,
+        # leaving the test's outer transaction usable for teardown.
+        with pytest.raises(IntegrityError), transaction.atomic():
+            WorkflowExecution.objects.create(
+                organization=org,
+                template=template,
+                document=document,
+                current_step=first_step,
+                status=WorkflowStatus.PENDING,
+                started_by=admin,
             )
 
 
