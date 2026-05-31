@@ -56,8 +56,10 @@ class WorkflowTemplateListCreateView(APIView):
     )
     def get(self, request: Request) -> Response:
         templates = get_templates(organization=request.organization)
-        return Response(
-            {"data": WorkflowTemplateSerializer(templates, many=True).data, "meta": {}}
+        paginator = StandardPagination()
+        page = paginator.paginate_queryset(templates, request)
+        return paginator.get_paginated_response(
+            WorkflowTemplateSerializer(page, many=True).data
         )
 
     @extend_schema(
@@ -251,6 +253,8 @@ class WorkflowExecutionLogsView(APIView):
             organization=request.organization, execution_id=execution_id
         )
         logs = get_step_logs(organization=request.organization, execution=execution)
-        return Response(
-            {"data": WorkflowStepLogSerializer(logs, many=True).data, "meta": {}}
+        paginator = StandardPagination()
+        page = paginator.paginate_queryset(logs, request)
+        return paginator.get_paginated_response(
+            WorkflowStepLogSerializer(page, many=True).data
         )
