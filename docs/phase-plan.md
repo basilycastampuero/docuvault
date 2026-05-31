@@ -1016,72 +1016,196 @@ valores de status no es trivial; va en service". Era incorrecta: sí es expresab
 
 ---
 
-## Fase 4 — Celery + OCR + IA
+## Fase 4 — Procesamiento Asíncrono (Celery + OCR + IA opcional)
 
-**Objetivo:** Procesamiento async, OCR de documentos e integración IA opcional.
-**Estimación:** 2–3 semanas
+**Objetivo:** que un documento subido se procese en segundo plano, se le extraiga el
+texto por OCR, y ese texto lo vuelva **buscable por su contenido interno** (no solo por su
+nombre). Más cerrar la deuda de blobs huérfanos de Fase 2.
+**Estimación:** 2–3 semanas (~30-40 tests, meta cobertura ≥ 95%).
 
-### 4.1 Celery setup
+**Por qué importa:** un pipeline async real (cola → worker → side-effects) con reintentos,
+idempotencia y tareas periódicas es de los puntos que más diferencian para un junior. La
+infra Celery ya existe (broker redis/1, backend redis/2, `config/celery.py`,
+`autodiscover_tasks`, `CELERY_TASK_ALWAYS_EAGER=True` en tests) pero está "vacía": esta fase
+la pone a trabajar. `process_ocr` ya está cableado vía `transaction.on_commit` desde
+`create_document` como stub.
+
+### Alcance cerrado (decidido antes de implementar — no re-discutir)
+
+1. **OCR cubre solo PDF + imágenes** (Tesseract). Office (docx/xlsx/zip) → `ocr_status =
+   skipped`. La extracción de texto de Office (con `python-docx`/`openpyxl`) es trabajo
+   futuro, fuera de Fase 4.
+2. **`ocr_status` es una columna real** (no JSONB), default `pending`. No hay re-OCR masivo
+   automático de los documentos existentes (quedan en `pending`).
+3. **Dev corre worker + beat en terminales del venv** (consistente con "Django en venv en
+   desarrollo"). Los servicios docker-compose de worker/beat pertenecen a la compose de
+   producción (Fase 5).
+4. **`CELERY_BEAT_SCHEDULE` estático** en settings. `django-celery-beat` (schedules
+   editables desde el admin) queda como mejora futura.
+5. **OCR completion se audita** con `AuditAction.UPDATE` + `metadata={"via": "ocr"}` (sin
+   añadir un valor nuevo al enum).
+6. **`cleanup_orphan_blobs` mira `Document` Y `DocumentVersion`** (las versiones tienen sus
+   propios blobs), con un **período de gracia** para no borrar uploads en vuelo.
+7. **IA (4.4) es opcional y va al final.** Modelo Haiku 4.5 por costo, prompt caching, key
+   por env (feature deshabilitada si no hay key).
+8. **Notificaciones y thumbnails se difieren a Fase 5** (necesitan infra de email / UI).
+
+### Qué falta hoy (inventario)
+
+| Pieza | Estado | Sub-fase |
+|-------|--------|----------|
+| `pytesseract`, `pdf2image` (pip) | ❌ no instaladas | 4.0 |
+| `tesseract-ocr`, `tesseract-ocr-spa`, `poppler-utils` (apt, NO pip) | ❌ | 4.0 |
+| `StorageService.download_file()` | ❌ no existe | 4.0 |
+| `Document.ocr_status` | ❌ no existe | 4.2 |
+| `process_ocr` cuerpo real + `ocr_service` | ⚠️ stub vacío | 4.2 |
+| `CELERY_BEAT_SCHEDULE` + tareas periódicas | ❌ | 4.1 / 4.3 |
+| `cleanup_orphan_blobs` (deuda Fase 2) | ❌ | 4.3 |
+| `anthropic` SDK + `ai_service` | ❌ opcional | 4.4 |
+
+### 4.0 Pre-flight (infra y dependencias)
+
+*DoD: `celery worker` levanta y `process_ocr` (aún stub) corre en un worker real.*
 
 ```
-Configuración:
-- Broker: Redis (db 1)
-- Result backend: Redis (db 2)
-- Celery Beat para tareas programadas
-- Configurar en config/celery.py
+Dependencias Python (requirements.txt):
+    pytesseract        # wrapper de Python sobre el binario Tesseract
+    pdf2image          # convierte páginas PDF a imágenes PIL (requiere poppler)
 
-Tareas iniciales:
-    tasks.documents.process_ocr(document_id)
-    tasks.documents.generate_thumbnail(document_id)
-    tasks.documents.cleanup_orphan_blobs()  (Celery Beat, diario — ver nota Fase 2)
-    tasks.notifications.send_email(user_id, template, context)
-    tasks.audit.cleanup_old_logs()  (Celery Beat, mensual)
+Dependencias de sistema (WSL Ubuntu) — gotcha: NO se instalan con pip:
+    sudo apt install -y tesseract-ocr tesseract-ocr-spa poppler-utils
+    (documentar en README; en prod van en el Dockerfile — Fase 5)
 
-Nota cleanup_orphan_blobs (deuda conocida de Fase 2):
-    Al hacer soft-delete de un documento, el archivo en MinIO/S3 NO se elimina
-    inmediatamente. Esta tarea periódica lista objetos en el bucket cuyo path
-    no tiene un Document vivo correspondiente en DB y los elimina.
-    Evita que el storage crezca indefinidamente con blobs huérfanos.
+StorageService.download_file(path) -> bytes:
+    boto3 get_object → devuelve los bytes crudos del blob. Pieza faltante
+    que conecta storage ↔ OCR.
+
+Settings nuevos (base.py, vía decouple):
+    OCR_LANGUAGES = config("OCR_LANGUAGES", default="spa+eng")
+    OCR_PDF_DPI   = config("OCR_PDF_DPI", default=200, cast=int)
+    CELERY_TASK_DEFAULT_RETRY_DELAY, CELERY_TASK_MAX_RETRIES
+    CELERY_BEAT_SCHEDULE = {}   # se puebla en 4.3
+
+Correr en dev (terminales separadas del venv):
+    celery -A config.celery worker -l info
+    celery -A config.celery beat   -l info
 ```
 
-### 4.2 Pipeline OCR
+### 4.1 Endurecimiento de Celery
+
+*DoD: una tarea que falla por error transitorio reintenta; una que falla por error
+permanente se marca fallida sin reintentar en loop.*
 
 ```
-Flujo:
-1. POST /api/v1/documents/ → crea documento
-2. DocumentService dispara: process_ocr.delay(document.id)
-3. Tarea Celery:
-   a. Descarga archivo de MinIO/S3
-   b. Si PDF: convertir páginas a imágenes (pdf2image)
-   c. Tesseract OCR sobre cada página
-   d. Concatenar texto extraído
-   e. Actualizar document.ocr_content
-   f. Actualizar document.search_vector
-   g. Registrar en AuditLog
-4. Documento ahora buscable por su contenido interno
+- Política de reintentos: bind=True, autoretry_for=(TransientError,),
+  max_retries, retry_backoff=True. Distinguir transitorio (timeout de storage
+  → reintenta) de permanente (archivo corrupto → no reintenta, marca failed).
+- Idempotencia: process_ocr seguro de correr dos veces (sobrescribe ocr_content).
+  Celery puede re-entregar un mensaje.
+- CLAUDE.md §12: la tarea NO tiene lógica → llama a un service. process_ocr fino,
+  lógica en ocr_service.
 ```
 
-### 4.3 Integración IA (diferenciador de portafolio)
+### 4.2 Pipeline OCR (corazón de la fase)
+
+*DoD: subo un PDF escaneado y segundos después GET /api/v1/search/?q=<palabra del
+contenido> lo encuentra.*
 
 ```
-Usando Claude API (Anthropic):
-- Summarización automática de documentos largos
-- Extracción de entidades clave (fechas, montos, nombres)
-- Categorización automática sugerida
+Campo nuevo Document.ocr_status (CharField + choices, migración):
+    pending → processing → completed / failed / skipped
+    Da observabilidad ("docs que fallaron OCR") y habilita re-procesar.
+    Docs existentes quedan en 'pending' por default (sin re-OCR masivo).
 
-Endpoint:
-    POST /api/v1/documents/{id}/analyze/
-    → Dispara tarea Celery que llama Claude API
-    → Guarda resultado en document.metadata['ai_analysis']
+ocr_service.process(document)  (apps/documents/services/ocr_service.py):
+    1. ocr_status = processing
+    2. blob = storage.download_file(document.storage_path)
+    3. ramificar por mime_type:
+       - image/jpeg, image/png → PIL.Image.open → pytesseract.image_to_string(lang=…)
+       - application/pdf → pdf2image.convert_from_bytes(dpi=…) → OCR por página → concat
+       - otros (docx/xlsx/zip) → ocr_status = skipped
+    4. document.ocr_content = texto; ocr_status = completed
+    5. document.save(update_fields=["ocr_content", "ocr_status", "updated_at"])
+       → DISPARA el signal de búsqueda (ocr_content es campo de texto) →
+         search_vector se reconstruye solo. CONEXIÓN CLAVE con Fase 3.3:
+         el OCR alimenta la búsqueda automáticamente, sin código extra.
+    6. audit_service.log(UPDATE, metadata={"via": "ocr"})
 
-Esto es opcional pero muy diferenciador en portafolio.
+Casos borde:
+    - página en blanco → ocr_content="", status completed
+    - archivo corrupto → failed, sin reintento
+    - timeout de storage → reintento (transitorio)
+
+Endpoint opcional de re-OCR:
+    POST /api/v1/documents/{id}/reprocess-ocr/  (Editor+) → re-dispara la tarea.
 ```
+
+### 4.3 Housekeeping periódico (cerrar deuda de Fase 2)
+
+*DoD: soft-deleteo un documento, corre la tarea diaria, y su blob (y los de sus versiones)
+desaparecen de MinIO.*
+
+```
+cleanup_orphan_blobs()  (Celery Beat, diario):
+    - Lista objetos del bucket (list_objects_v2, paginado).
+    - Un blob es huérfano si su path NO está referenciado por ningún Document vivo
+      (storage_path) NI por ningún DocumentVersion de un documento vivo.
+      ⚠️ Las versiones tienen sus propios blobs: al soft-deletear un documento se
+      huerfanizan el blob actual Y los de todas sus versiones. Mirar ambas tablas.
+    - Período de gracia (ej. 24h): no borrar blobs creados hace menos de X horas,
+      para no competir con uploads en vuelo donde el commit de DB llega tarde.
+
+cleanup_old_audit_logs()  (opcional, mensual) — SENSIBLE (compliance):
+    AuditLog.delete() lanza RuntimeError (inmutable), pero QuerySet.delete() lo
+    saltea. Default deshabilitado / retención muy larga; mejor archivar que borrar.
+    No es core de Fase 4.
+```
+
+### 4.4 Análisis IA con Claude API (OPCIONAL — diferenciador de portafolio)
+
+*DoD: POST /api/v1/documents/{id}/analyze/ devuelve resumen + entidades + categoría
+sugerida, guardado en metadata["ai_analysis"].*
+
+```
+Endpoint → tarea analyze_document → ai_service.analyze(document):
+    - SDK anthropic, modelo Haiku 4.5 (claude-haiku-4-5) por costo en extracción.
+    - Input: ocr_content (truncado a un presupuesto de tokens); requiere contenido.
+    - Prompt caching del system prompt (instrucciones de extracción) → reduce costo.
+    - Output JSON: {summary, entities: {dates, amounts, names}, suggested_category}
+      → metadata["ai_analysis"].
+    - ANTHROPIC_API_KEY vía decouple, NUNCA hardcodeado. Sin key → 503 (feature off).
+    - Auditado.
+```
+
+### Estrategia de tests
+
+Como `CELERY_TASK_ALWAYS_EAGER=True`, las tareas corren síncronas. **Se mockea el motor
+OCR** (no se corre Tesseract real en unit tests — lento y depende del binario):
+
+| Grupo | Qué cubrir |
+|-------|-----------|
+| `ocr_service` | mock de `pytesseract.image_to_string` + `storage.download_file`; ramas por mime; update de campos; audit; **doc queda buscable tras OCR** |
+| Fallos OCR | corrupto → `failed` sin reintento; status transiciona correctamente |
+| `cleanup_orphan_blobs` | mock de list del bucket + docs reales; borra solo huérfanos; respeta período de gracia; considera versiones |
+| IA (4.4) | mock del cliente `anthropic` |
+| Integración (opcional) | 1 test con fixture de imagen real, marcado `slow`, skip si no hay binario Tesseract |
 
 ### Entregable Fase 4
-- [ ] Celery funcionando con Redis
-- [ ] OCR pipeline para PDFs e imágenes
-- [ ] Documentos indexados y buscables por contenido
-- [ ] (Opcional) Análisis IA de documentos
+- [ ] Celery worker + beat operativos contra Redis
+- [ ] OCR pipeline para PDFs e imágenes (Office → skipped)
+- [ ] `Document.ocr_status` con observabilidad del pipeline
+- [ ] Documentos buscables por su contenido interno (OCR → search_vector automático)
+- [ ] `cleanup_orphan_blobs` cerrando la deuda de Fase 2 (con período de gracia)
+- [ ] Tareas reintentables e idempotentes
+- [ ] (Opcional 4.4) Análisis IA de documentos con Claude API
+- [ ] drf-spectacular sigue en 0 errors / 0 warnings
+
+### Pasos futuros (post-Fase 4)
+- **Fase 5:** frontend, CI/CD, deploy VPS, observabilidad (Sentry), notificaciones (email en
+  workflow), thumbnails. El Dockerfile de prod debe instalar `tesseract-ocr`/`poppler-utils`.
+- Extracción de texto de Office (docx/xlsx) con `python-docx`/`openpyxl`.
+- `django-celery-beat` para schedules editables desde el admin.
+- Flower para monitoreo del worker.
 
 ---
 

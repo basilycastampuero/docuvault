@@ -797,10 +797,30 @@ de código.
     un campo de texto (name/description/tags/ocr_content). `bulk_create` saltaría el
     signal (caveat para el OCR async de Fase 4).
 
-**Próximo paso:** Fase 4 — Celery + OCR + IA. Configurar broker/result backend de Redis
-y Celery Beat; implementar el cuerpo real de `process_ocr` (descarga de MinIO, OCR con
-Tesseract, poblar `ocr_content` + `search_vector`); `cleanup_orphan_blobs` (deuda de
-Fase 2); opcional análisis IA con Claude API. Ver `docs/phase-plan.md` §4.
+**Decisiones de diseño cerradas de Fase 4 (PLANIFICADAS, aún no implementadas — ver
+`docs/phase-plan.md` §4):**
+12. OCR cubre **solo PDF + imágenes** (Tesseract). Office (docx/xlsx/zip) → `ocr_status =
+    skipped`. Extracción de texto de Office = trabajo futuro.
+13. **`ocr_status` es columna real** (CharField + choices: pending/processing/completed/
+    failed/skipped), default `pending`. Sin re-OCR masivo automático de docs existentes.
+14. **El OCR alimenta la búsqueda automáticamente:** `ocr_service` guarda `ocr_content`
+    con `update_fields`, lo que dispara el signal de FTS y reconstruye `search_vector`.
+    Sin código extra de indexación.
+15. **Tareas llaman a services** (CLAUDE.md §12): `process_ocr` es fino, la lógica vive en
+    `ocr_service`. Reintentos `autoretry_for=(TransientError,)`; idempotente.
+16. **`cleanup_orphan_blobs`** (Beat diario) mira `Document` Y `DocumentVersion`, con
+    período de gracia para no borrar uploads en vuelo. Cierra la deuda de Fase 2 (#5).
+17. Dev corre worker+beat en **venv** (no docker); `CELERY_BEAT_SCHEDULE` **estático**.
+18. OCR completion auditado con `UPDATE` + `metadata={"via":"ocr"}` (sin nuevo enum).
+19. **IA (4.4) opcional**, Haiku 4.5, prompt caching, `ANTHROPIC_API_KEY` por env
+    (feature-off si falta). Notificaciones y thumbnails → Fase 5.
+20. Falta antes de empezar: `pip` (`pytesseract`, `pdf2image`) + `apt`
+    (`tesseract-ocr tesseract-ocr-spa poppler-utils`) + `StorageService.download_file()`.
+
+**Próximo paso:** Fase 4 — empezar por 4.0 (deps pip+apt, `StorageService.download_file`,
+settings de OCR/Celery), luego 4.1 (reintentos/idempotencia), 4.2 (`ocr_service` +
+`ocr_status` + endpoint re-OCR), 4.3 (`cleanup_orphan_blobs`), y 4.4 IA opcional al final.
+Ver `docs/phase-plan.md` §4 para el plan detallado con DoD por sub-fase.
 
 Ver `docs/phase-plan.md` para el plan completo de desarrollo.
 
