@@ -86,18 +86,20 @@ See `docs/manual-testing.md` for step-by-step curl examples testing all features
 
 ## Status
 
-Active development — **Phase 2 complete.**
+Active development — **Phase 3 complete.** Next: Phase 4 (Celery + OCR + AI).
 
 | Phase | Scope | Status |
 |-------|-------|--------|
 | 0 | Setup (Docker, pre-commit, env) | ✅ Complete |
 | 1 | Auth + Organizations + RBAC + Users | ✅ Complete |
 | 2 | Document management + versioning + storage + audit | ✅ Complete |
-| 3 | Audit endpoints + Workflows + Full-text search | 🔜 Next |
+| 3.1 | Audit read API with filters and role-based access | ✅ Complete |
+| 3.2 | Workflow engine (templates, steps, executions, approval flows) | ✅ Complete |
+| 3.3 | Full-text search with PostgreSQL tsvector + GIN | ✅ Complete |
 | 4 | Celery pipelines + OCR + AI analysis | 📅 Planned |
 | 5 | Frontend + Deploy + Observability | 📅 Planned |
 
-**286 tests passing, 98% coverage.**
+**394 tests passing, 98% coverage.**
 
 ---
 

@@ -953,11 +953,66 @@ Endpoint:
     GET /api/v1/search/?q=contrato&folder=&status=
 ```
 
-### Entregable Fase 3
-- [ ] AuditLog registrando todos los eventos críticos
-- [ ] Workflows funcionando con al menos 1 template de ejemplo
-- [ ] Full-text search con ranking de relevancia
-- [ ] Tests de audit, workflows y search
+#### Decisiones cerradas (no re-discutir durante la implementación)
+
+1. **Signal `post_save`, no trigger de PostgreSQL.** El vector se reconstruye desde
+   un `@receiver(post_save, sender=Document)` que hace `Document.objects.filter(pk=...)
+   .update(search_vector=...)` (sin recursión: `.update()` no dispara `post_save`). Un
+   trigger SQL sería más eficiente pero el signal es suficiente para el volumen actual y
+   más legible. Reevaluar en Fase 4 si el OCR async escribe `ocr_content` en masa.
+2. **Pesos de relevancia:** `name`=A, `description`=B, `tags`=C, `ocr_content`=D.
+   `tags` es `ArrayField` → se une a string con `Value(" ".join(tags))` porque no se
+   puede pasar como nombre de columna a `SearchVector`.
+3. **`config="simple"`** (sin stemming) en `SearchVector` y `SearchQuery`. Decisión
+   deliberada para un corpus multi-tenant que mezcla ES/EN: `simple` no asume idioma.
+   El trade-off es que "contratos" no matchea "contrato". Reevaluable por-tenant a futuro.
+4. **`SearchQuery(..., search_type="websearch")`** en el selector: tolera input natural
+   de usuario (varias palabras, `"frase exacta"`, `-excluir`) sin operadores AND
+   explícitos ni romperse con entradas inesperadas.
+5. **El guard del signal solo reconstruye si cambió un campo de texto** (`name`,
+   `description`, `tags`, `ocr_content`). Un save de solo `status`/`version`/
+   `storage_path` no toca el vector → se evita write-amplification.
+6. **Data migration de backfill** para documentos creados antes del signal. `bulk_create`
+   seguiría saltándose el signal — caveat conocido para el OCR async de Fase 4.
+
+#### Entregable 3.3 — ✅ COMPLETADO (2026-05-31, commit ec691d9)
+- [x] Signal que puebla `search_vector` con pesos A/B/C/D (índice GIN ya existía)
+- [x] `SearchSelector.search_documents` con `SearchQuery`/`SearchRank`, N+1-safe, filtros
+- [x] `GET /api/v1/search/` con envelope `{data, meta}`, paginación, `IsOrganizationMember`
+- [x] Data migration de backfill
+- [x] Tenant isolation explícito en selector y API
+- [x] drf-spectacular en 0 errors / 0 warnings (`DocumentStatusEnum` en overrides)
+- [x] 18 tests (signal, selector, API) en verde
+
+### Auditoría de Fase 3 — correcciones aplicadas (2026-05-31)
+
+Tras completar 3.3 se hizo una auditoría completa de toda la Fase 3. Se encontraron y
+corrigieron 3 hallazgos accionables (1 de correctitud, 2 de calidad):
+
+1. **🔴 Race condition en `start_workflow`** (commit c9258ea). La regla "una sola
+   ejecución activa por documento" se aplicaba solo con un `.exists()` no atómico → dos
+   requests concurrentes podían crear dos ejecuciones activas. **Fix:** `UniqueConstraint`
+   parcial `uq_wf_exec_one_active_per_document` sobre `(document)` WHERE
+   `status IN (pending, in_progress) AND deleted_at IS NULL` + `try/except IntegrityError
+   → ConflictError` (409 limpio). El `.exists()` queda como fast-path.
+2. **🟡 `advance_step` sin lock de fila** (commit c9258ea). Dos aprobadores concurrentes
+   podían leer `IN_PROGRESS` y doble-avanzar. **Fix:** `select_for_update(of=("self",))`
+   al re-fetchear la ejecución (`of=self` porque `current_step` es FK nullable → LEFT JOIN,
+   y Postgres prohíbe `FOR UPDATE` sobre el lado nullable de un outer join).
+3. **🟡 Paginación inconsistente** (commit 6162e74). `GET /workflows/templates/` y
+   `.../logs/` devolvían listas sin paginar (`meta: {}`), violando CLAUDE.md §7. **Fix:**
+   `StandardPagination` en ambos.
+
+Nota de corrección al plan original: la nota de §3.2 decía "constraint parcial con dos
+valores de status no es trivial; va en service". Era incorrecta: sí es expresable con
+`status__in`. El constraint es ahora el backstop race-proof.
+
+### Entregable Fase 3 — ✅ COMPLETADO (2026-05-31)
+- [x] AuditLog registrando todos los eventos críticos (3.1 + hooks de Fase 2)
+- [x] Workflows funcionando con motor de templates/steps/executions (3.2)
+- [x] Full-text search con ranking de relevancia (3.3)
+- [x] Tests de audit, workflows y search (394 tests totales, 98% cobertura)
+- [x] Auditoría de fase con correcciones de concurrencia y consistencia aplicadas
 
 ---
 

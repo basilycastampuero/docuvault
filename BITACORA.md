@@ -1,9 +1,18 @@
-# SasVault — Bitácora de Preparación del Proyecto
-## Autodocumentación completa: todo lo hecho, por qué se hizo, y el estado actual
+# SasVault — Bitácora del Proyecto
+## Diario de desarrollo: el camino, las decisiones, las complicaciones y lo aprendido
 
-> Este documento es tu referencia personal. Explica qué se hizo, por qué, en qué orden,
-> y dónde estamos ahora. Léelo cada vez que necesites reorientarte.
-> Última actualización: Fase 1 completa (1.1–1.6), Fase 2 plan cerrado, listo para empezar.
+> Este documento está escrito **para humanos** (vos, un recruiter, tu yo del futuro).
+> Cuenta la historia del proyecto en lenguaje natural: qué se construyó, qué se complicó,
+> qué se decidió y por qué. No es una referencia técnica exhaustiva — para eso están
+> `CLAUDE.md`, `docs/phase-plan.md` y los demás `.md` de `docs/`, escritos para que Claude
+> Code y vos tengan contexto preciso al programar.
+>
+> **Cómo leerlo:** las Partes 1–4 son el setup y la Fase 1 (historia ya estable). La
+> Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
+> dónde estamos hoy.
+>
+> Última actualización: **Fase 3 completa + auditoría de fase** (2026-05-31). 394 tests,
+> 98% cobertura. Próximo: Fase 4 (Celery + OCR + IA).
 
 ---
 
@@ -795,3 +804,196 @@ git commit -m "feat(scope): descripción en imperativo, sin punto final"
 | `backend/requirements.txt` | Dependencias Python con versiones fijadas |
 | `docker-compose.yml` | Servicios de infraestructura local |
 | `.pre-commit-config.yaml` | Checks automáticos antes de cada commit |
+
+---
+
+# PARTE 5 — Diario vivo: Fases 2 y 3
+
+> Todo lo de arriba es el setup y la Fase 1, que quedaron estables hace tiempo. Desde acá
+> empieza el diario real de construcción del producto: la gestión documental (Fase 2) y la
+> capa de auditoría + workflows + búsqueda (Fase 3). Escrito en lenguaje llano, con las
+> complicaciones tal como pasaron.
+
+## Mapa rápido de dónde estamos (2026-05-31)
+
+| Fase | Qué es | Estado |
+|------|--------|--------|
+| 2 | Documentos: carpetas, upload a MinIO, versionado, validación de archivos, auditoría | ✅ |
+| 3.1 | API de lectura de auditoría (quién hizo qué, con filtros y permisos) | ✅ |
+| 3.2 | Motor de workflows (plantillas de aprobación, ejecuciones, pasos) | ✅ |
+| 3.3 | Búsqueda full-text con PostgreSQL (sin Elasticsearch) | ✅ |
+| — | Auditoría de toda la Fase 3 con correcciones | ✅ |
+| 4 | Celery + OCR + IA | ⏭️ Siguiente |
+
+**394 tests en verde, 98% de cobertura.** Los tests corren contra PostgreSQL real (no
+SQLite en memoria); si fallan con "connection refused" es que falta `docker compose up -d`,
+no es un bug del código.
+
+---
+
+## Fase 2 — Gestión documental (el corazón del producto)
+
+Esta fase fue la más larga y la que más se parece a "construir un producto de verdad".
+La idea: que una organización pueda subir archivos, organizarlos en carpetas, versionarlos
+y que todo quede auditado.
+
+**Lo que se construyó, en cristiano:**
+- **Carpetas jerárquicas** con detección de ciclos (no podés meter una carpeta dentro de
+  sí misma ni de sus descendientes). Suena trivial hasta que lo implementás bien.
+- **Upload de archivos a MinIO** (el "S3 local"). El archivo nunca toca PostgreSQL — la DB
+  solo guarda metadata y la ruta del blob. Esto es lo correcto y lo que se espera en
+  producción.
+- **Validación de archivos por "magic bytes"**, no por extensión. Si alguien renombra un
+  `.exe` a `.pdf`, el sistema lo detecta leyendo los primeros bytes reales del archivo
+  (con `python-magic`). Más checksum SHA-256 y límite de 50 MB.
+- **Versionado**: cada vez que subís una versión nueva, la anterior se preserva. No hay
+  sobrescritura destructiva.
+- **Auditoría desde el día uno**: cada create/update/delete genera un registro inmutable.
+
+**Complicaciones reales de esta fase:**
+- `python-magic` necesita la librería `libmagic1` del sistema operativo. En WSL hubo que
+  instalarla aparte — no basta con `pip install`.
+- boto3 contra MinIO necesita `signature_version="s3v4"` para que las URLs prefirmadas
+  (presigned URLs) funcionen. Sin eso, las descargas fallan de formas confusas.
+- Decidimos **mockear** los tests de almacenamiento (no pegarle a MinIO de verdad todavía).
+  Más rápido para iterar; la integración real se deja para Fase 4 cuando haya CI.
+- Quedó una **deuda conocida y documentada**: al borrar (soft-delete) un documento, el blob
+  en MinIO NO se elimina. Eso lo limpia una tarea periódica en Fase 4
+  (`cleanup_orphan_blobs`). Preferimos dejarlo anotado que improvisar.
+
+**Decisión que marcó el resto del proyecto:** `Document.status` tiene 5 estados posibles
+(draft, under_review, approved, rejected, archived), pero en Fase 2 **solo** permitimos las
+transiciones manuales `draft ↔ under_review`. Llegar a `approved`/`rejected` quedó
+bloqueado a propósito — eso solo puede pasar por un workflow (Fase 3.2). Separar "gestión de
+archivos" de "lógica de aprobación" mantuvo cada parte limpia.
+
+---
+
+## Fase 3 — Auditoría, workflows y búsqueda
+
+### 3.1 — Leer la auditoría (la parte fácil de una idea importante)
+
+El modelo de auditoría ya existía desde Fase 2 (se escribía en cada evento). Lo que faltaba
+era **poder leerla**: un endpoint `GET /api/v1/audit-logs/` con filtros (por acción, por
+entidad, por usuario, por rango de fechas) y permisos (solo auditor/admin pueden ver).
+
+Dos decisiones que vale la pena recordar:
+- **Leer la auditoría NO genera un registro de auditoría.** Si lo hiciera, cada lectura
+  crearía un log, que a su vez se podría leer... ruido infinito y una tabla que crece sin
+  control. La lectura de logs simplemente no se audita.
+- La API es **estrictamente de solo lectura**. No hay POST/PATCH/DELETE — un log de
+  auditoría que se pudiera editar o borrar no serviría para nada. Cualquier intento de
+  escritura devuelve 405.
+
+### 3.2 — El motor de workflows (la parte difícil e interesante)
+
+Acá es donde el proyecto deja de ser "un Drive" y se vuelve "un DocuWare". La idea: una
+organización define **plantillas de aprobación** (ej: "Revisión legal" → paso 1 lo aprueba
+un supervisor, paso 2 lo aprueba un admin, y recién ahí el documento queda aprobado). Cada
+documento puede correr una de esas plantillas.
+
+**Las piezas:** plantillas (`WorkflowTemplate`) con pasos ordenados (`WorkflowStep`),
+ejecuciones en curso (`WorkflowExecution`) y una bitácora de cada acción
+(`WorkflowStepLog`). El servicio sabe avanzar paso a paso: aprobar lleva al siguiente paso
+(o completa el workflow si era el final), rechazar lo corta, comentar solo deja una nota.
+
+**La conexión clave con Fase 2:** el workflow es la ÚNICA vía privilegiada para llevar un
+documento a `approved`/`rejected`. Escribe el status directamente, saltándose el guard
+manual de Fase 2 (que sigue rechazando esas transiciones por la API normal). Esto se
+documentó con un comentario en el código para que nadie lo "arregle" por error.
+
+**Regla de negocio crítica:** un documento solo puede tener **una** ejecución activa a la
+vez. No tiene sentido aprobar el mismo documento por dos flujos en paralelo. (Spoiler: esta
+regla tenía un bug sutil que encontramos después, en la auditoría — ver más abajo).
+
+### 3.3 — Búsqueda full-text (PostgreSQL, no Elasticsearch)
+
+Mucha gente metería Elasticsearch acá. Decisión deliberada: **no**. PostgreSQL tiene
+búsqueda full-text nativa muy capaz, y meter Elasticsearch significaría otro servicio que
+mantener, sincronizar y desplegar. Para el tamaño de este proyecto, es complejidad
+innecesaria — y saber cuándo NO añadir una tecnología es criterio de ingeniería.
+
+**Cómo funciona:** cada documento tiene una columna `search_vector` (un `tsvector` de
+Postgres) que se arma combinando su nombre, descripción, tags y contenido OCR, cada uno con
+un **peso de relevancia** distinto (el nombre pesa más que el contenido OCR). Un índice GIN
+hace que la búsqueda sea rápida. El endpoint `GET /api/v1/search/?q=contrato` devuelve los
+resultados **ordenados por relevancia**.
+
+**Complicaciones reales de esta fase:**
+- **El guion bajo rompe la búsqueda.** PostgreSQL tokeniza `"annual_report.pdf"` como UN
+  solo token (`annual_report`), así que buscar "annual" no lo encontraba. Los tests
+  fallaban hasta que entendimos esto y usamos nombres con espacios naturales. Lección: el
+  tokenizador de FTS no es magia, hay que entender cómo parte el texto.
+- **Idioma.** Usamos `config="simple"` (sin stemming) a propósito, porque el sistema es
+  multi-tenant y puede mezclar español e inglés. El trade-off honesto: "contratos" no
+  matchea "contrato". Se puede afinar por-tenant en el futuro.
+- **Tags son un array**, y PostgreSQL no deja meter un array directo en el vector de
+  búsqueda. Hubo que unirlos a texto (`" ".join(tags)`) antes de indexarlos.
+- **Documentos viejos.** El vector se llena con un signal al guardar, pero los documentos
+  creados antes de existir el signal quedarían invisibles. Se escribió una migración de
+  "backfill" que los reindexó a todos.
+
+---
+
+## La auditoría de Fase 3 (revisar el propio trabajo)
+
+Antes de cerrar la fase, en vez de hacer commit y seguir, paramos a **auditar todo lo
+construido en Fase 3** contra las reglas del proyecto. Esto encontró 3 problemas reales que
+ya están corregidos. Vale documentarlos porque son justo el tipo de cosa que diferencia en
+una entrevista técnica.
+
+**1. 🔴 Race condition en "una sola ejecución activa por documento" (bug de verdad).**
+La regla se aplicaba con un check del estilo "¿ya hay una ejecución activa? si no, creá
+una". El problema clásico: si dos requests llegan **al mismo tiempo**, ambos preguntan
+"¿hay una activa?", ambos reciben "no", y ambos crean una → terminás con dos ejecuciones
+activas, justo lo que la regla prohibía. No había nada en la base de datos que lo impidiera.
+**La corrección** tiene dos capas: (a) un constraint único parcial en PostgreSQL que hace
+físicamente imposible tener dos ejecuciones activas para el mismo documento, y (b) el código
+ahora atrapa el error de la base de datos y devuelve un 409 limpio en vez de reventar con un
+500. El check rápido se queda como atajo amigable. *Entender y resolver race conditions a
+nivel de DB, no solo en código, es exactamente lo que se evalúa en roles senior.*
+
+**2. 🟡 Doble-avance en workflows.** Parecido pero más leve: dos aprobadores actuando sobre
+la misma ejecución en el mismo instante podían avanzarla dos veces. Se corrigió bloqueando
+la fila de la ejecución (`SELECT ... FOR UPDATE`) mientras se procesa. Detalle técnico que
+costó un rato: hubo que usar `of=("self",)` porque la consulta hace un LEFT JOIN con el paso
+actual (que puede ser nulo), y PostgreSQL no deja bloquear el lado nullable de un join.
+
+**3. 🟡 Paginación inconsistente.** Dos listados de workflows devolvían todos los resultados
+sin paginar, mientras el resto de la API sí paginaba. Inconsistencia de diseño — se unificó.
+Pequeño, pero "consistencia" es justo lo que se mira en "diseño de API profesional".
+
+**De yapa**, durante la búsqueda se afinó el signal que reconstruye el `search_vector`: antes
+se reconstruía en CADA guardado de documento (incluso al cambiar solo el status), lo cual es
+desperdicio de escrituras. Ahora solo se reconstruye si cambió un campo de texto.
+
+**La lección de meta-nivel:** auditar tu propio trabajo antes de darlo por terminado
+encuentra cosas que el "happy path" de los tests no toca — sobre todo concurrencia. Vale la
+pena el rato extra.
+
+---
+
+## Ideas y pendientes anotados (para no perderlos)
+
+- **OCR real (Fase 4.2):** hoy `process_ocr` es un stub vacío que ya está "cableado" vía
+  `transaction.on_commit`. Cuando se implemente, cada documento subido será buscable por su
+  contenido interno, no solo por su nombre.
+- **`cleanup_orphan_blobs` (Fase 4):** la tarea periódica que borra de MinIO los archivos
+  cuyo documento fue soft-deleted. Deuda conocida desde Fase 2.
+- **`bulk_create` salta el signal de búsqueda:** si en Fase 4 el OCR inserta documentos en
+  masa, hay que reindexar a mano. Anotado para no olvidarlo.
+- **IA con Claude API (Fase 4.3, opcional):** resumen automático, extracción de entidades
+  (fechas, montos, nombres), categorización sugerida. Es el "diferenciador de portafolio".
+- **Stemming por idioma:** si algún día importa que "contrato" matchee "contratos", se puede
+  configurar FTS por-tenant según su idioma.
+
+---
+
+## Cómo se está usando Claude Code en este proyecto (nota de proceso)
+
+El flujo se mantuvo: **yo defino la interfaz** (qué hace cada función, qué recibe, qué
+devuelve), **Claude implementa el cuerpo**, y **reviso cada línea antes del commit**. La
+auditoría de Fase 3 es buen ejemplo de usar la IA más allá de "escribime esta función":
+sirvió para revisar críticamente el código ya escrito y encontrar problemas de concurrencia
+que yo no había mirado. El objetivo sigue siendo el mismo — entender el código lo suficiente
+para defenderlo en una entrevista.

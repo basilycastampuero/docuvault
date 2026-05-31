@@ -695,7 +695,7 @@ fix/{name}    ← Corrección de bugs
 
 ## 17. Estado actual del proyecto
 
-**Fase actual:** 3.3 — Full-Text Search (próxima a iniciar). Fases 3.1 y 3.2 completas.
+**Fase actual:** Fase 3 COMPLETA (3.1 + 3.2 + 3.3 + auditoría de fase). Próxima: Fase 4.
 
 **Completado:**
 - [x] **Fase 0** — Setup completo: WSL2, Docker Compose (PG16 + Redis7 + MinIO),
@@ -745,17 +745,27 @@ fix/{name}    ← Corrección de bugs
       manual de `change_document_status` de Fase 2 sigue intacto). Validación de rol
       por paso en el service. Una sola ejecución activa por documento.
       `ENUM_NAME_OVERRIDES` añadido para mantener drf-spectacular en 0 warnings.
+- [x] **Fase 3.3** — Full-Text Search nativo de PostgreSQL: signal `post_save` que
+      puebla `Document.search_vector` con pesos A/B/C/D (name/description/tags/
+      ocr_content), `config="simple"`; `SearchSelector` con `SearchQuery(websearch)`
+      + `SearchRank` sobre el índice GIN; endpoint `GET /api/v1/search/?q=&folder=&status=`
+      con envelope, paginación y `IsOrganizationMember`; data migration de backfill.
+      `DocumentStatusEnum` añadido a `ENUM_NAME_OVERRIDES`.
+- [x] **Auditoría de Fase 3** — corregidos 3 hallazgos: (1) race condition de "una
+      ejecución activa por documento" → `UniqueConstraint` parcial + IntegrityError→409;
+      (2) `advance_step` sin lock → `select_for_update(of=self)`; (3) listados de
+      workflows sin paginar → `StandardPagination`. Ver `docs/phase-plan.md` §3.3.
 - [x] drf-spectacular configurado y operativo (0 errors / 0 warnings)
 - [x] Documentación API (Swagger UI en `/api/docs/`, Redoc en `/api/redoc/`)
 
-**Métricas:** 370 tests pasando, cobertura 98% (Fase 3.2 completa, 2026-05-30).
+**Métricas:** 394 tests pasando, cobertura 98% (Fase 3 completa + auditoría, 2026-05-31).
 Nota: los tests requieren PostgreSQL real corriendo (`docker compose up -d`); si falla
 con `connection refused` en `localhost:5432`, la infra está apagada — no es un fallo
 de código.
 
 **Apps activas en INSTALLED_APPS:**
 `apps.core`, `apps.organizations`, `apps.authentication`, `apps.permissions`,
-`apps.audit`, `apps.documents`, `apps.workflows`
+`apps.audit`, `apps.documents`, `apps.workflows`, `apps.search`
 
 **Decisiones de diseño cerradas de Fase 2 (ya implementadas, no re-discutir):**
 1. `AuditLog` usa `BigAutoField` (no UUID) y NO hereda `BaseModel` — inmutable,
@@ -776,15 +786,21 @@ de código.
    `_set_document_status`), saltándose el guard manual de `change_document_status`.
    Es la ÚNICA vía privilegiada a `approved`/`rejected`. El guard manual sigue intacto.
 9. Un documento solo puede tener UNA ejecución activa (`pending`/`in_progress`) a la
-   vez. El rol requerido por paso se valida en el service; ORG_ADMIN/SUPER_ADMIN
-   pueden actuar sobre cualquier paso (override).
+   vez. **Respaldado a nivel de DB** por el `UniqueConstraint` parcial
+   `uq_wf_exec_one_active_per_document` (corrección de la auditoría de Fase 3); el
+   `.exists()` del service queda como fast-path. El rol requerido por paso se valida en
+   el service; ORG_ADMIN/SUPER_ADMIN pueden actuar sobre cualquier paso (override).
 10. `config`/`actions` (JSONB en template/step) se persisten pero NO se interpretan
     hasta Fase 4 (notificaciones, side-effects automáticos).
+11. **FTS usa `config="simple"`** (sin stemming) — deliberado para corpus multi-tenant
+    ES/EN. El `search_vector` se reconstruye vía signal `post_save` SOLO cuando cambia
+    un campo de texto (name/description/tags/ocr_content). `bulk_create` saltaría el
+    signal (caveat para el OCR async de Fase 4).
 
-**Próximo paso:** Fase 3.3 — Full-Text Search con PostgreSQL nativo: poblar
-`Document.search_vector` (signal/trigger), índice GIN ya existe, `SearchSelector` con
-`SearchQuery`/`SearchRank`, endpoint `GET /api/v1/search/?q=...`. Ver `docs/phase-plan.md`
-§3.3. La app `apps.search` ya existe como skeleton vacío.
+**Próximo paso:** Fase 4 — Celery + OCR + IA. Configurar broker/result backend de Redis
+y Celery Beat; implementar el cuerpo real de `process_ocr` (descarga de MinIO, OCR con
+Tesseract, poblar `ocr_content` + `search_vector`); `cleanup_orphan_blobs` (deuda de
+Fase 2); opcional análisis IA con Claude API. Ver `docs/phase-plan.md` §4.
 
 Ver `docs/phase-plan.md` para el plan completo de desarrollo.
 
