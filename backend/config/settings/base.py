@@ -44,7 +44,7 @@ LOCAL_APPS: list[str] = [
     "apps.documents",
     "apps.workflows",
     # "apps.notifications",
-    # "apps.search",
+    "apps.search",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -174,6 +174,7 @@ SPECTACULAR_SETTINGS = {
         "AuditActionEnum": "apps.audit.models.AuditAction.choices",
         "WorkflowStepActionEnum": "apps.workflows.models.WorkflowStepAction.choices",
         "UserRoleEnum": "apps.authentication.models.UserRole.choices",
+        "DocumentStatusEnum": "apps.documents.models.DocumentStatus.choices",
     },
 }
 
