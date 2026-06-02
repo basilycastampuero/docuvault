@@ -14,6 +14,14 @@ class DocumentStatus(models.TextChoices):
     ARCHIVED = "archived", "Archived"
 
 
+class OcrStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    PROCESSING = "processing", "Processing"
+    COMPLETED = "completed", "Completed"
+    FAILED = "failed", "Failed"
+    SKIPPED = "skipped", "Skipped"
+
+
 class Document(BaseModel):
     organization = models.ForeignKey(
         "organizations.Organization",
@@ -51,6 +59,11 @@ class Document(BaseModel):
     )
     metadata = models.JSONField(default=dict, blank=True)
     ocr_content = models.TextField(blank=True)
+    ocr_status = models.CharField(
+        max_length=20,
+        choices=OcrStatus.choices,
+        default=OcrStatus.PENDING,
+    )
     search_vector = SearchVectorField(null=True)
 
     class Meta:
