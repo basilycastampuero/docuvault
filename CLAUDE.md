@@ -695,8 +695,9 @@ fix/{name}    ← Corrección de bugs
 
 ## 17. Estado actual del proyecto
 
-**Fase actual:** Fase 4 EN CURSO. 4.0 (pre-flight) + 4.1 (Celery hardening) COMPLETAS;
-siguiente: 4.2 (pipeline OCR). Fase 3 COMPLETA (3.1 + 3.2 + 3.3 + auditoría de fase).
+**Fase actual:** Fase 4 EN CURSO. 4.0 (pre-flight) + 4.1 (Celery hardening) + 4.2 (pipeline
+OCR) COMPLETAS; siguiente: 4.3 (`cleanup_orphan_blobs`). Fase 3 COMPLETA (3.1 + 3.2 + 3.3 +
+auditoría de fase).
 
 **Completado:**
 - [x] **Fase 0** — Setup completo: WSL2, Docker Compose (PG16 + Redis7 + MinIO),
@@ -827,12 +828,19 @@ usuario:** instalar los binarios apt (no bloquean 4.1; requeridos para el OCR re
 
 **4.1 (Celery hardening) COMPLETA (2026-06-02):** `TransientError` en `core/exceptions`
 (no hereda `ApplicationError`); `process_ocr` con `autoretry_for=(TransientError,)`,
-`retry_backoff`, `max_retries` desde settings; tarea fina que delega en
-`ocr_service.process()` (stub fino, cuerpo real en 4.2). 401 tests, 99%.
+`retry_backoff`, `max_retries` desde settings; tarea fina que delega en `ocr_service`.
 
-**Próximo paso:** Fase 4.2 (`ocr_service` real + `ocr_status` columna + endpoint re-OCR;
-el OCR alimenta `search_vector` vía el signal de 3.3), luego 4.3 (`cleanup_orphan_blobs`)
-y 4.4 IA opcional al final. Ver `docs/phase-plan.md` §4 para el DoD por sub-fase.
+**4.2 (pipeline OCR) COMPLETA (2026-06-02):** columna real `Document.ocr_status`
+(`OcrStatus`: pending/processing/completed/failed/skipped) + migración 0003; cuerpo real
+de `ocr_service.process()` (imagen vía Pillow+pytesseract, PDF vía pdf2image, office→skipped);
+guardar `ocr_content` dispara el signal FTS de 3.3 → buscable por contenido sin código extra;
+transitorio (timeout)→retry, permanente (NoSuchKey/corrupto)→failed; endpoint
+`POST /documents/{id}/reprocess-ocr/` (Editor+, 202) vía `document_service.reprocess_ocr`;
+`ocr_status` expuesto read-only. 413 tests, 99%. Tesseract real verificado por smoke test.
+
+**Próximo paso:** Fase 4.3 (`cleanup_orphan_blobs`: tarea Beat diaria que borra de MinIO los
+blobs de `Document`/`DocumentVersion` huérfanos, con período de gracia) y 4.4 IA opcional al
+final. Ver `docs/phase-plan.md` §4 para el DoD por sub-fase.
 
 Ver `docs/phase-plan.md` para el plan completo de desarrollo.
 

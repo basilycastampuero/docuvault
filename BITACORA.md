@@ -11,9 +11,9 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Fase 4 en curso — 4.0 (pre-flight) y 4.1 (endurecimiento de
-> Celery) completas** (2026-06-02). 401 tests, 99% cobertura. Próximo: Fase 4.2 (pipeline
-> OCR real).
+> Última actualización: **Fase 4 en curso — 4.0 (pre-flight), 4.1 (endurecimiento de
+> Celery) y 4.2 (pipeline OCR real) completas** (2026-06-02). 413 tests, 99% cobertura.
+> Próximo: Fase 4.3 (limpieza de archivos huérfanos).
 
 ---
 
@@ -826,11 +826,11 @@ git commit -m "feat(scope): descripción en imperativo, sin punto final"
 | — | Auditoría de toda la Fase 3 con correcciones | ✅ |
 | 4.0 | Pre-flight: dependencias OCR, descarga de blobs, settings de Celery/OCR | ✅ |
 | 4.1 | Endurecimiento de Celery: reintentos inteligentes e idempotencia | ✅ |
-| 4.2 | Pipeline OCR real (PDF + imágenes → texto buscable) | ⏭️ Siguiente |
-| 4.3 | Limpieza periódica de archivos huérfanos en MinIO | ⏳ |
+| 4.2 | Pipeline OCR real (PDF + imágenes → texto buscable) | ✅ |
+| 4.3 | Limpieza periódica de archivos huérfanos en MinIO | ⏭️ Siguiente |
 | 4.4 | Análisis con IA (Claude API) — opcional | ⏳ |
 
-**401 tests en verde, 99% de cobertura.** Los tests corren contra PostgreSQL real (no
+**413 tests en verde, 99% de cobertura.** Los tests corren contra PostgreSQL real (no
 SQLite en memoria); si fallan con "connection refused" es que falta `docker compose up -d`,
 no es un bug del código.
 
@@ -1056,15 +1056,63 @@ puede testear lo que realmente importa — **la política**: que un `TransientEr
 por el mecanismo de reintento (lanza `Retry`), mientras que un error permanente se propaga
 tal cual sin pasar por ahí. Eso es exactamente la distinción que define la fase.
 
+### 4.2 — El OCR real: el corazón de la fase
+
+Acá es donde el documento empieza a ser buscable **por lo que dice adentro**. La idea
+completa: subís un PDF escaneado o una foto de un contrato, un proceso en segundo plano le
+extrae el texto, y a los segundos podés buscar una palabra que está dentro de la imagen y el
+documento aparece.
+
+**Lo primero fue agregar una columna `ocr_status`** al documento, con cinco estados posibles:
+pendiente → procesando → completado / fallido / omitido. ¿Por qué una columna de verdad y no
+guardarlo en un campo JSON flexible? Porque es algo que vas a querer **consultar**: "mostrame
+todos los documentos a los que les falló el OCR". Lo que se filtra va en una columna real con
+posible índice; el JSON es para datos que solo lees enteros. Además da **observabilidad**: de
+un vistazo sabés en qué estado está el pipeline de cada documento.
+
+**El servicio de OCR** (`ocr_service`) es el que hace el trabajo pesado, y se ramifica según
+el tipo de archivo: una imagen (JPG/PNG) se abre con Pillow y se le pasa Tesseract directo;
+un PDF primero se convierte a imágenes página por página (con Poppler), y cada página se
+OCR-ea por separado. Cualquier otra cosa (un Word, un Excel, un ZIP) se marca como "omitido"
+— extraer texto de Office es otra técnica distinta, queda como trabajo futuro.
+
+**La conexión más elegante de toda la fase** es que no escribí *ni una línea* de código para
+indexar el texto en la búsqueda. ¿Cómo? En la Fase 3.3 había un "signal" (un disparador) que
+reconstruye el vector de búsqueda cada vez que cambia un campo de texto del documento. El OCR,
+al guardar el texto extraído en el campo `ocr_content`, **dispara ese signal automáticamente**.
+El documento se vuelve buscable solo, gratis. Las piezas de fases distintas encajan sin
+pegamento. Eso es lo que se siente cuando la arquitectura está bien pensada desde el principio.
+
+**Dónde se nota la 4.1:** ahora que el OCR hace cosas reales, los errores reales aparecen, y
+la distinción transitorio/permanente que parecía teórica se vuelve concreta:
+- MinIO tarda en responder al descargar el archivo → transitorio → reintenta.
+- El archivo no existe en MinIO (`NoSuchKey`) → permanente → marca "fallido" y para (¿para
+  qué reintentar descargar algo que no está?).
+- El archivo está corrupto y Tesseract no puede leerlo → permanente → "fallido".
+- Una página en blanco → no es un error: texto vacío, estado "completado".
+
+**Un endpoint de re-OCR** (`POST /documents/{id}/reprocess-ocr/`) permite re-disparar el
+proceso a mano — útil si un documento quedó en "fallido" por un problema temporal ya resuelto,
+o si se mejora el motor de OCR. Devuelve `202 Accepted`, el código HTTP que significa
+"recibí tu pedido y lo voy a procesar, pero todavía no terminé" — correcto para algo asíncrono.
+
+**Sobre testear OCR:** los tests unitarios **no corren Tesseract de verdad** — sería lento y
+dependería de que el binario esté instalado en cada máquina. En su lugar se "mockea" el motor:
+se le dice "cuando te llamen, devolvé este texto", y se verifica que el servicio haga lo
+correcto con esa respuesta (guardar el texto, cambiar el estado, auditar, hacerlo buscable).
+Aparte, hice **una prueba manual con Tesseract real**: generé una imagen con la palabra
+"CONTRATO ARRENDAMIENTO" y confirmé que el motor la lee. Esa separación —lógica con mocks,
+binario real verificado a mano— es la práctica estándar: tests rápidos y deterministas para
+la lógica, una verificación puntual de que la integración con la herramienta externa funciona.
+
 ---
 
 ## Ideas y pendientes anotados (para no perderlos)
 
-- **OCR real (Fase 4.2):** hoy `process_ocr` es un stub vacío que ya está "cableado" vía
-  `transaction.on_commit`. Cuando se implemente, cada documento subido será buscable por su
-  contenido interno, no solo por su nombre.
-- **`cleanup_orphan_blobs` (Fase 4):** la tarea periódica que borra de MinIO los archivos
-  cuyo documento fue soft-deleted. Deuda conocida desde Fase 2.
+- ✅ **OCR real (Fase 4.2 — hecho):** cada documento subido ya es buscable por su contenido
+  interno, no solo por su nombre. (Ver la sección de Fase 4.2 más arriba.)
+- **`cleanup_orphan_blobs` (Fase 4.3 — siguiente):** la tarea periódica que borra de MinIO los
+  archivos cuyo documento fue soft-deleted. Deuda conocida desde Fase 2.
 - **`bulk_create` salta el signal de búsqueda:** si en Fase 4 el OCR inserta documentos en
   masa, hay que reindexar a mano. Anotado para no olvidarlo.
 - **IA con Claude API (Fase 4.3, opcional):** resumen automático, extracción de entidades

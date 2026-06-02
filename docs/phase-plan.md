@@ -1206,6 +1206,41 @@ Endpoint opcional de re-OCR:
     POST /api/v1/documents/{id}/reprocess-ocr/  (Editor+) → re-dispara la tarea.
 ```
 
+#### Entregable 4.2 — ✅ COMPLETADO (2026-06-02)
+
+Detalle de lo implementado y el porqué:
+
+1. **`Document.ocr_status`** (columna real, `OcrStatus` TextChoices: pending/processing/
+   completed/failed/skipped, default `pending`). Columna real (no JSONB) porque se filtra
+   y da observabilidad del pipeline (CLAUDE.md §6). Migración `0003_add_document_ocr_status`
+   con default constante (operación de metadata en PG16, no reescribe tabla). Docs
+   existentes quedan en `pending` (sin re-OCR masivo). Sin índice por ahora (query de baja
+   frecuencia; "no índices por si acaso").
+2. **`ocr_service.process(document)`** (cuerpo real): `processing` → ramifica por mime
+   (imagen vía `PIL.Image.open` + `pytesseract`; PDF vía `pdf2image.convert_from_bytes`
+   a `OCR_PDF_DPI` + OCR por página; resto → `skipped`) → guarda `ocr_content` +
+   `completed` → audita `UPDATE` con `metadata={"via":"ocr"}` (user=None, acción de
+   sistema). Idempotente (sobrescribe).
+3. **Conexión clave con 3.3 (sin código de indexación):** el `save(update_fields=
+   ["ocr_content", ...])` dispara el signal `post_save` de FTS → `search_vector` se
+   reconstruye solo → el documento se vuelve buscable por su contenido. Las transiciones
+   de solo-status (`_set_status`) usan `update_fields` sin campos de texto → el signal las
+   ignora (sin write-amplification).
+4. **Transitorio vs permanente** (apoya 4.1): descarga con timeout/error de red →
+   `TransientError` (reintenta); blob inexistente (`NoSuchKey`/`404`/`NoSuchBucket`) →
+   `failed` sin reintento; archivo corrupto (Tesseract/Pillow revienta) → `failed` sin
+   reintento; página en blanco → `completed` con `ocr_content=""`.
+5. **Endpoint `POST /api/v1/documents/{id}/reprocess-ocr/`** (Editor+, `202 Accepted`).
+   View orquesta; lógica en `document_service.reprocess_ocr` (audita `via=ocr_reprocess`
+   + `transaction.on_commit(process_ocr.delay)`).
+6. **`ocr_status` expuesto** read-only en `DocumentSerializer`.
+
+**Verificación:** 413 tests en verde (+12), 99% cobertura. drf-spectacular 0 warnings.
+Smoke test con **Tesseract real** sobre una imagen generada confirma la cadena
+Pillow→Tesseract→Poppler operativa end-to-end (los unit tests mockean el motor por
+velocidad/determinismo). El test `test_document_is_searchable_by_ocr_content` cierra el
+DoD: tras el OCR, el documento aparece en `search_documents(q=<palabra del contenido>)`.
+
 ### 4.3 Housekeeping periódico (cerrar deuda de Fase 2)
 
 *DoD: soft-deleteo un documento, corre la tarea diaria, y su blob (y los de sus versiones)
