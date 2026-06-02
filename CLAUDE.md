@@ -695,7 +695,8 @@ fix/{name}    ← Corrección de bugs
 
 ## 17. Estado actual del proyecto
 
-**Fase actual:** Fase 3 COMPLETA (3.1 + 3.2 + 3.3 + auditoría de fase). Próxima: Fase 4.
+**Fase actual:** Fase 4 EN CURSO. 4.0 (pre-flight) COMPLETA; siguiente: 4.1.
+Fase 3 COMPLETA (3.1 + 3.2 + 3.3 + auditoría de fase).
 
 **Completado:**
 - [x] **Fase 0** — Setup completo: WSL2, Docker Compose (PG16 + Redis7 + MinIO),
@@ -817,8 +818,14 @@ de código.
 20. Falta antes de empezar: `pip` (`pytesseract`, `pdf2image`) + `apt`
     (`tesseract-ocr tesseract-ocr-spa poppler-utils`) + `StorageService.download_file()`.
 
-**Próximo paso:** Fase 4 — empezar por 4.0 (deps pip+apt, `StorageService.download_file`,
-settings de OCR/Celery), luego 4.1 (reintentos/idempotencia), 4.2 (`ocr_service` +
+**4.0 (pre-flight) COMPLETA (2026-06-02, rama `feature/celery-ocr-pipeline`):** deps pip
+fijadas (`pdf2image`, `pytesseract`); `StorageService.download_file()` + test; settings
+OCR (`OCR_LANGUAGES`, `OCR_PDF_DPI`) y Celery (retry delay/max, `CELERY_BEAT_SCHEDULE={}`,
+`CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP`); `.env.example` actualizado. Worker real
+verificado contra Redis ejecutando el stub `process_ocr`. 395 tests, 99%. **Pendiente del
+usuario:** instalar los binarios apt (no bloquean 4.1; requeridos para el OCR real de 4.2).
+
+**Próximo paso:** Fase 4.1 (reintentos/idempotencia de Celery), luego 4.2 (`ocr_service` +
 `ocr_status` + endpoint re-OCR), 4.3 (`cleanup_orphan_blobs`), y 4.4 IA opcional al final.
 Ver `docs/phase-plan.md` §4 para el plan detallado con DoD por sub-fase.
 

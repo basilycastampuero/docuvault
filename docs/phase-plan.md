@@ -1091,6 +1091,38 @@ Correr en dev (terminales separadas del venv):
     celery -A config.celery beat   -l info
 ```
 
+#### Entregable 4.0 — ✅ COMPLETADO (2026-06-02)
+
+Detalle de lo implementado y el porqué de cada pieza:
+
+1. **Dependencias pip** (`requirements.txt`): `pdf2image==1.17.0` y
+   `pytesseract==0.3.13`. Son wrappers Python: `pytesseract` invoca el binario
+   Tesseract; `pdf2image` rasteriza páginas PDF a imágenes PIL (Tesseract no lee PDF
+   nativo). Instalados en el venv y fijados con versión exacta. `pillow` ya estaba.
+2. **Dependencias de sistema (apt)**: `tesseract-ocr`, `tesseract-ocr-spa`,
+   `poppler-utils`. **Gotcha:** NO se instalan con pip; son binarios del SO. Sin ellos
+   `pytesseract` lanza `TesseractNotFoundError` y `pdf2image` falla. No bloquean 4.0/4.1
+   (el stub no los usa); son requisito de 4.2 (OCR real). Documentados en `.env.example`.
+3. **`StorageService.download_file(path) -> bytes`** (`storage_service.py`): pieza
+   faltante que conecta storage↔OCR. Usa `get_object` y devuelve los bytes crudos del
+   blob. El OCR necesita leer el archivo desde MinIO. Test mockeado añadido
+   (`test_storage_service.py`) siguiendo el patrón de Fase 2 (boto3 vía monkeypatch).
+4. **Settings OCR** (`base.py`, vía `decouple`): `OCR_LANGUAGES="spa+eng"` (corpus
+   multi-tenant ES/EN) y `OCR_PDF_DPI=200` (trade-off precisión/velocidad al rasterizar).
+5. **Settings Celery** (`base.py`): `CELERY_TASK_DEFAULT_RETRY_DELAY=60`,
+   `CELERY_TASK_MAX_RETRIES=3` (cimientos de la política de reintentos de 4.1),
+   `CELERY_BEAT_SCHEDULE={}` (se puebla en 4.3) y
+   `CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP=True` (mantiene el comportamiento actual
+   ante el cambio de default en Celery 6.0; silencia el `CPendingDeprecationWarning`).
+6. **`.env.example`**: documentadas las nuevas variables (OCR + Celery retry) con una
+   nota recordando los paquetes apt requeridos.
+
+**Verificación (DoD cumplido):** `manage.py check` sin issues; un worker Celery **real**
+(`celery -A config.celery worker`) booteó contra Redis (`redis/1`), recibió un
+`process_ocr.delay(...)` y ejecutó el stub con resultado `succeeded` — la fontanería
+async funciona fuera del modo EAGER. Suite completa en verde: **395 tests, 99%
+cobertura**. black/isort/flake8 limpios.
+
 ### 4.1 Endurecimiento de Celery
 
 *DoD: una tarea que falla por error transitorio reintenta; una que falla por error
