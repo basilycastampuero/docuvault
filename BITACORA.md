@@ -11,8 +11,9 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Fase 3 completa + auditoría de fase** (2026-05-31). 394 tests,
-> 98% cobertura. Próximo: Fase 4 (Celery + OCR + IA).
+> Última actualización: **Fase 4 en curso — 4.0 (pre-flight) y 4.1 (endurecimiento de
+> Celery) completas** (2026-06-02). 401 tests, 99% cobertura. Próximo: Fase 4.2 (pipeline
+> OCR real).
 
 ---
 
@@ -807,14 +808,14 @@ git commit -m "feat(scope): descripción en imperativo, sin punto final"
 
 ---
 
-# PARTE 5 — Diario vivo: Fases 2 y 3
+# PARTE 5 — Diario vivo: Fases 2, 3 y 4
 
 > Todo lo de arriba es el setup y la Fase 1, que quedaron estables hace tiempo. Desde acá
-> empieza el diario real de construcción del producto: la gestión documental (Fase 2) y la
-> capa de auditoría + workflows + búsqueda (Fase 3). Escrito en lenguaje llano, con las
-> complicaciones tal como pasaron.
+> empieza el diario real de construcción del producto: la gestión documental (Fase 2), la
+> capa de auditoría + workflows + búsqueda (Fase 3) y el procesamiento asíncrono con OCR
+> (Fase 4). Escrito en lenguaje llano, con las complicaciones tal como pasaron.
 
-## Mapa rápido de dónde estamos (2026-05-31)
+## Mapa rápido de dónde estamos (2026-06-02)
 
 | Fase | Qué es | Estado |
 |------|--------|--------|
@@ -823,9 +824,13 @@ git commit -m "feat(scope): descripción en imperativo, sin punto final"
 | 3.2 | Motor de workflows (plantillas de aprobación, ejecuciones, pasos) | ✅ |
 | 3.3 | Búsqueda full-text con PostgreSQL (sin Elasticsearch) | ✅ |
 | — | Auditoría de toda la Fase 3 con correcciones | ✅ |
-| 4 | Celery + OCR + IA | ⏭️ Siguiente |
+| 4.0 | Pre-flight: dependencias OCR, descarga de blobs, settings de Celery/OCR | ✅ |
+| 4.1 | Endurecimiento de Celery: reintentos inteligentes e idempotencia | ✅ |
+| 4.2 | Pipeline OCR real (PDF + imágenes → texto buscable) | ⏭️ Siguiente |
+| 4.3 | Limpieza periódica de archivos huérfanos en MinIO | ⏳ |
+| 4.4 | Análisis con IA (Claude API) — opcional | ⏳ |
 
-**394 tests en verde, 98% de cobertura.** Los tests corren contra PostgreSQL real (no
+**401 tests en verde, 99% de cobertura.** Los tests corren contra PostgreSQL real (no
 SQLite en memoria); si fallan con "connection refused" es que falta `docker compose up -d`,
 no es un bug del código.
 
@@ -970,6 +975,86 @@ desperdicio de escrituras. Ahora solo se reconstruye si cambió un campo de text
 **La lección de meta-nivel:** auditar tu propio trabajo antes de darlo por terminado
 encuentra cosas que el "happy path" de los tests no toca — sobre todo concurrencia. Vale la
 pena el rato extra.
+
+---
+
+## Fase 4 — Procesamiento asíncrono (Celery + OCR)
+
+La pregunta que responde esta fase: hasta ahora un documento se podía buscar **por su
+nombre**, pero no **por lo que dice adentro**. Si subís un PDF escaneado llamado
+`escaneo_001.pdf`, buscar "contrato de arrendamiento" no lo encuentra aunque esas palabras
+estén dentro. El OCR (reconocimiento óptico de caracteres) extrae el texto de la imagen, y
+ese texto se vuelve buscable. Pero el OCR es lento: no podés hacerlo mientras el usuario
+espera la respuesta del upload. Por eso entra **Celery**: el upload responde al instante y el
+OCR corre después, en segundo plano, en un proceso aparte (un "worker").
+
+La infraestructura de Celery ya existía desde fases anteriores (el broker Redis, la config),
+pero estaba "vacía": cableada pero sin hacer nada real. Esta fase la pone a trabajar. Decidí
+ir **por partes**, con un commit lógico por pieza, porque mezclar "instalar dependencias",
+"lógica de reintentos" y "OCR real" en un solo commit gigante es justo lo que la guía de Git
+del proyecto prohíbe.
+
+### 4.0 — Pre-flight: preparar el terreno
+
+Antes de escribir nada de OCR, hay que tener las herramientas instaladas. Acá apareció el
+**gotcha más típico de OCR en Python**: Tesseract (el motor de OCR) y Poppler (para leer
+PDFs) **no son paquetes de Python** — son programas del sistema operativo. Se instalan con
+`apt`, no con `pip`. Los wrappers de Python (`pytesseract`, `pdf2image`) son solo un puente:
+si el programa de sistema no está, fallan con un error confuso. Documenté esto en
+`.env.example` y en el plan para que no sea una sorpresa al desplegar en producción.
+
+Otra pieza que faltaba: el `StorageService` sabía **subir** archivos a MinIO pero no
+**descargarlos**. El OCR necesita leer el archivo de vuelta para procesarlo, así que agregué
+`download_file()`. Pieza chica pero es la que conecta el almacenamiento con el OCR.
+
+El resto fueron *settings*: el idioma del OCR (`spa+eng`, porque el corpus mezcla español e
+inglés y no quiero asumir un solo idioma), la resolución a la que se convierte un PDF a
+imagen (más resolución = más preciso pero más lento), y la política de reintentos. Todo por
+variable de entorno, nunca hardcodeado.
+
+**Cómo verifiqué que la base funcionaba (sin haber escrito OCR todavía):** levanté un worker
+de Celery **de verdad** (no el modo de tests), le mandé la tarea stub, y confirmé en los logs
+que el worker la recibió y la ejecutó. Esto separa dos preguntas que conviene no mezclar:
+"¿la fontanería async funciona?" (4.0) y "¿mi lógica de OCR funciona?" (4.2). Si algo falla
+más adelante, ya sé que no es Celery.
+
+### 4.1 — Reintentos inteligentes: no todos los errores son iguales
+
+Esta sub-fase es chica en código pero es **la decisión de diseño más interesante de la
+fase**. La idea: cuando una tarea en segundo plano falla, ¿hay que reintentarla?
+
+Depende del **tipo** de error, y tratarlos a todos igual es un error de novato:
+
+- **Error transitorio:** MinIO tardó demasiado, Redis estaba ocupado un instante. Esto es
+  pasajero — reintentar en unos segundos probablemente funcione. **Sí reintentar.**
+- **Error permanente:** el PDF está corrupto, el documento fue borrado. Esto no se va a
+  arreglar solo — reintentarlo 3 veces es desperdiciar el worker haciendo lo mismo una y
+  otra vez (un "retry-loop"). **No reintentar; marcar como fallido y seguir.**
+
+La solución fue crear una excepción propia, `TransientError`, que significa exactamente "esto
+es recuperable, vale la pena reintentar". La tarea se configura para reintentar **solo** ante
+ese error específico; cualquier otra excepción se propaga y la tarea queda fallida sin
+reintentos. Además, los reintentos usan *backoff exponencial* (espera 1s, luego 2s, luego
+4s…) en vez de martillar el recurso que ya estaba caído.
+
+Un detalle de diseño que me gustó: `TransientError` **no** hereda de la excepción base del
+proyecto (la que se convierte en respuestas HTTP de error). ¿Por qué? Porque este error
+nunca llega al usuario por HTTP — vive enteramente dentro del worker, como una señal interna.
+Mezclarla con las excepciones de la API habría sido conceptualmente sucio. Hay un test que
+"congela" esa decisión: verifica que el manejador de errores HTTP la ignora.
+
+La tarea quedó **fina**: no tiene lógica, solo busca el documento y delega en un service
+(`ocr_service`), respetando la regla del proyecto de que las tareas Celery no llevan lógica
+de negocio. El `ocr_service` por ahora es un stub; su cuerpo real es la 4.2.
+
+**Una complicación al testear:** en los tests, Celery corre las tareas de forma síncrona
+(modo "eager"), y en ese modo **no existe el reintento de verdad** — no hay un broker que
+reprograme la tarea, así que `retry()` lanza una excepción especial (`Retry`) en lugar de
+volver a ejecutar. Al principio mis tests asumían que contaría los reintentos reales y
+fallaron. La lección: en modo eager no se puede testear "cuántas veces reintentó", pero sí se
+puede testear lo que realmente importa — **la política**: que un `TransientError` se enrute
+por el mecanismo de reintento (lanza `Retry`), mientras que un error permanente se propaga
+tal cual sin pasar por ahí. Eso es exactamente la distinción que define la fase.
 
 ---
 

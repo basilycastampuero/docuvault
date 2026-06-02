@@ -695,8 +695,8 @@ fix/{name}    ← Corrección de bugs
 
 ## 17. Estado actual del proyecto
 
-**Fase actual:** Fase 4 EN CURSO. 4.0 (pre-flight) COMPLETA; siguiente: 4.1.
-Fase 3 COMPLETA (3.1 + 3.2 + 3.3 + auditoría de fase).
+**Fase actual:** Fase 4 EN CURSO. 4.0 (pre-flight) + 4.1 (Celery hardening) COMPLETAS;
+siguiente: 4.2 (pipeline OCR). Fase 3 COMPLETA (3.1 + 3.2 + 3.3 + auditoría de fase).
 
 **Completado:**
 - [x] **Fase 0** — Setup completo: WSL2, Docker Compose (PG16 + Redis7 + MinIO),
@@ -825,9 +825,14 @@ OCR (`OCR_LANGUAGES`, `OCR_PDF_DPI`) y Celery (retry delay/max, `CELERY_BEAT_SCH
 verificado contra Redis ejecutando el stub `process_ocr`. 395 tests, 99%. **Pendiente del
 usuario:** instalar los binarios apt (no bloquean 4.1; requeridos para el OCR real de 4.2).
 
-**Próximo paso:** Fase 4.1 (reintentos/idempotencia de Celery), luego 4.2 (`ocr_service` +
-`ocr_status` + endpoint re-OCR), 4.3 (`cleanup_orphan_blobs`), y 4.4 IA opcional al final.
-Ver `docs/phase-plan.md` §4 para el plan detallado con DoD por sub-fase.
+**4.1 (Celery hardening) COMPLETA (2026-06-02):** `TransientError` en `core/exceptions`
+(no hereda `ApplicationError`); `process_ocr` con `autoretry_for=(TransientError,)`,
+`retry_backoff`, `max_retries` desde settings; tarea fina que delega en
+`ocr_service.process()` (stub fino, cuerpo real en 4.2). 401 tests, 99%.
+
+**Próximo paso:** Fase 4.2 (`ocr_service` real + `ocr_status` columna + endpoint re-OCR;
+el OCR alimenta `search_vector` vía el signal de 3.3), luego 4.3 (`cleanup_orphan_blobs`)
+y 4.4 IA opcional al final. Ver `docs/phase-plan.md` §4 para el DoD por sub-fase.
 
 Ver `docs/phase-plan.md` para el plan completo de desarrollo.
 

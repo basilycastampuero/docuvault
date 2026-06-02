@@ -1138,6 +1138,40 @@ permanente se marca fallida sin reintentar en loop.*
   lógica en ocr_service.
 ```
 
+#### Entregable 4.1 — ✅ COMPLETADO (2026-06-02)
+
+Detalle de lo implementado y el porqué:
+
+1. **`TransientError`** (`apps/core/exceptions.py`): excepción que marca un fallo
+   **recuperable** (timeout de storage/red). **Deliberadamente NO hereda de
+   `ApplicationError`**: nunca llega a la capa HTTP; es una señal interna para la
+   política de reintentos. El `custom_exception_handler` la ignora (devuelve `None`),
+   verificado en test.
+2. **`process_ocr` endurecida** (`apps/documents/tasks/document_tasks.py`):
+   `@shared_task(bind=True, autoretry_for=(TransientError,), retry_backoff=True,
+   retry_jitter=True, retry_kwargs={"max_retries": settings.CELERY_TASK_MAX_RETRIES})`.
+   - Solo reintenta ante `TransientError`; cualquier otra excepción se propaga y la
+     tarea queda fallida sin reintentar (evita retry-loops con fallos permanentes).
+   - `retry_backoff` exponencial + jitter para no martillar el recurso caído.
+   - `max_retries` desde settings (configurable por entorno).
+3. **Tarea fina → `ocr_service`** (CLAUDE.md §12): la tarea solo hace fetch del
+   `Document` y delega en `ocr_service.process(document)` (imports lazy para evitar
+   ciclos). `Document.DoesNotExist` → return sin reintentar (es permanente: el
+   `on_commit` pudo dispararse para una transacción que hizo rollback).
+4. **`ocr_service.process(document)`** (`apps/documents/services/ocr_service.py`):
+   creado como stub fino y documentado como idempotente (Celery puede re-entregar).
+   El cuerpo OCR real + `ocr_status` llegan en 4.2; aquí solo se establece el cableado
+   y la política de reintentos, ya testeable de forma aislada.
+
+**Nota de testing (modo eager):** con `CELERY_TASK_ALWAYS_EAGER` +
+`EAGER_PROPAGATES`, una tarea eager no reintenta en bucle (no hay broker que
+reprograme): `self.retry()` lanza `celery.exceptions.Retry`. Los tests verifican la
+**política** (no el conteo de reintentos): `TransientError` → se lanza `Retry` (en
+prod reintentaría); error permanente → se propaga tal cual sin pasar por `retry()`.
+
+**Verificación:** suite completa en verde — **401 tests, 99% cobertura** (+6 vs 4.0:
+4 de la tarea + 2 de `TransientError`). black/isort/flake8 limpios.
+
 ### 4.2 Pipeline OCR (corazón de la fase)
 
 *DoD: subo un PDF escaneado y segundos después GET /api/v1/search/?q=<palabra del
