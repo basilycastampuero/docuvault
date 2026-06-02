@@ -53,6 +53,17 @@ class ConflictError(ApplicationError):
     status_code = status.HTTP_409_CONFLICT
 
 
+class TransientError(Exception):
+    """Recoverable failure that should trigger a Celery task retry.
+
+    Deliberately NOT an ApplicationError: it never reaches the HTTP layer. It is
+    an internal signal for the retry policy of async tasks — raise it for failures
+    that are likely to succeed on a later attempt (e.g. a storage/network timeout),
+    as opposed to permanent failures (corrupt file, missing record) which should
+    propagate without retrying.
+    """
+
+
 def custom_exception_handler(exc: Exception, context: dict) -> Response | None:
     """
     Transforms all exceptions into the standard API error envelope:

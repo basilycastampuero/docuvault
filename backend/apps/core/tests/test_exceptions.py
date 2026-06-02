@@ -8,6 +8,7 @@ from apps.core.exceptions import (
     ConflictError,
     NotFound,
     PermissionDenied,
+    TransientError,
     ValidationError,
     custom_exception_handler,
 )
@@ -54,6 +55,18 @@ class TestBusinessExceptions:
         exc = ConflictError()
         assert exc.status_code == status.HTTP_409_CONFLICT
         assert exc.code == "CONFLICT"
+
+
+class TestTransientError:
+    def test_is_exception_but_not_application_error(self):
+        # It must stay outside the HTTP error family: it is an internal retry signal.
+        assert issubclass(TransientError, Exception)
+        assert not issubclass(TransientError, ApplicationError)
+
+    def test_handler_ignores_transient_error(self):
+        factory = APIRequestFactory()
+        context = {"request": factory.get("/"), "view": None}
+        assert custom_exception_handler(TransientError("timeout"), context) is None
 
 
 class TestCustomExceptionHandler:
