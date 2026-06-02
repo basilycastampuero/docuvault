@@ -328,6 +328,28 @@ class DocumentDownloadView(APIView):
 
 
 @extend_schema(tags=["Documents"])
+class DocumentReprocessOcrView(APIView):
+    permission_classes = [IsOrganizationMember]
+
+    @extend_schema(
+        summary="Re-run OCR for a document",
+        request=None,
+        responses={202: DocumentSerializer},
+    )
+    def post(self, request: Request, document_id) -> Response:
+        FolderListCreateView._require_editor(request)
+        doc = get_document_by_id(
+            organization=request.organization, document_id=document_id
+        )
+        doc = document_service.reprocess_ocr(
+            organization=request.organization, user=request.user, document=doc
+        )
+        return Response(
+            {"data": DocumentSerializer(doc).data}, status=status.HTTP_202_ACCEPTED
+        )
+
+
+@extend_schema(tags=["Documents"])
 class DocumentVersionListView(APIView):
     permission_classes = [IsOrganizationMember]
     parser_classes = [MultiPartParser, FormParser]

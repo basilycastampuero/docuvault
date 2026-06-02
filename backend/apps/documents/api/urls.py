@@ -4,6 +4,7 @@ from .views import (
     DocumentDetailView,
     DocumentDownloadView,
     DocumentListCreateView,
+    DocumentReprocessOcrView,
     DocumentVersionListView,
     FolderChildrenView,
     FolderDetailView,
@@ -39,5 +40,10 @@ urlpatterns = [
         "documents/<uuid:document_id>/versions/",
         DocumentVersionListView.as_view(),
         name="document-versions",
+    ),
+    path(
+        "documents/<uuid:document_id>/reprocess-ocr/",
+        DocumentReprocessOcrView.as_view(),
+        name="document-reprocess-ocr",
     ),
 ]

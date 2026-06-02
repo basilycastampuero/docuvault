@@ -1,5 +1,5 @@
 import io
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from rest_framework.test import APIClient
@@ -318,3 +318,39 @@ class TestDocumentVersions:
         assert response.status_code == 200
         assert len(response.json()["data"]) == 2
         assert response.json()["data"][0]["version_number"] == 2
+
+
+@pytest.mark.django_db
+class TestReprocessOcr:
+    def test_editor_can_reprocess_and_dispatches_task(
+        self, django_capture_on_commit_callbacks
+    ):
+        org = OrganizationFactory()
+        user = _editor(org)
+        doc = DocumentFactory(organization=org, created_by=user)
+        with patch(
+            "apps.documents.services.document_service.process_ocr.delay"
+        ) as mock_delay:
+            with django_capture_on_commit_callbacks(execute=True):
+                response = _client_for(user).post(
+                    f"/api/v1/documents/{doc.id}/reprocess-ocr/"
+                )
+        assert response.status_code == 202
+        mock_delay.assert_called_once_with(str(doc.id))
+
+    def test_viewer_cannot_reprocess(self):
+        org = OrganizationFactory()
+        doc = DocumentFactory(organization=org)
+        response = _client_for(_viewer(org)).post(
+            f"/api/v1/documents/{doc.id}/reprocess-ocr/"
+        )
+        assert response.status_code == 403
+
+    def test_reprocess_other_org_returns_404(self):
+        org_a = OrganizationFactory()
+        org_b = OrganizationFactory()
+        doc_a = DocumentFactory(organization=org_a)
+        response = _client_for(_editor(org_b)).post(
+            f"/api/v1/documents/{doc_a.id}/reprocess-ocr/"
+        )
+        assert response.status_code == 404

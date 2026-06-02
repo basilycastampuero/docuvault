@@ -229,6 +229,27 @@ def change_document_status(
 
 
 @transaction.atomic
+def reprocess_ocr(
+    organization: "Organization",
+    user: "User",
+    document: Document,
+) -> Document:
+    """Re-trigger the OCR pipeline for a document. The task is dispatched after
+    commit so the worker never picks it up before this transaction is durable."""
+    audit_service.log(
+        organization=organization,
+        user=user,
+        entity_type="document",
+        entity_id=str(document.id),
+        action=AuditAction.UPDATE,
+        metadata={"via": "ocr_reprocess"},
+    )
+    transaction.on_commit(lambda: process_ocr.delay(str(document.id)))
+    logger.info("OCR reprocess requested: %s (org=%s)", document.id, organization.id)
+    return document
+
+
+@transaction.atomic
 def soft_delete_document(
     organization: "Organization",
     user: "User",
