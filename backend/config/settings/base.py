@@ -206,11 +206,32 @@ CELERY_RESULT_BACKEND = config(
     "CELERY_RESULT_BACKEND", default="redis://localhost:6379/2"
 )
 CELERY_ACCEPT_CONTENT = ["json"]
+# Retain connection-retry-on-startup behavior (default flips in Celery 6.0).
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = "UTC"
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes hard limit
+
+# Retry policy for tasks that opt in via autoretry_for (see Phase 4.1).
+CELERY_TASK_DEFAULT_RETRY_DELAY = config(
+    "CELERY_TASK_DEFAULT_RETRY_DELAY", default=60, cast=int
+)
+CELERY_TASK_MAX_RETRIES = config("CELERY_TASK_MAX_RETRIES", default=3, cast=int)
+
+# Periodic tasks (Celery Beat). Populated in Phase 4.3 (cleanup_orphan_blobs).
+CELERY_BEAT_SCHEDULE: dict = {}
+
+# ---------------------------------------------------------------------------
+# OCR — Tesseract
+# ---------------------------------------------------------------------------
+
+# Languages passed to Tesseract. "spa+eng" because the corpus mixes ES/EN;
+# requires the apt packages tesseract-ocr-spa (+ tesseract-ocr for eng).
+OCR_LANGUAGES = config("OCR_LANGUAGES", default="spa+eng")
+# DPI used to rasterize PDF pages before OCR. Higher = better accuracy, slower.
+OCR_PDF_DPI = config("OCR_PDF_DPI", default=200, cast=int)
 
 # ---------------------------------------------------------------------------
 # Static & Media
