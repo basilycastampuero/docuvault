@@ -45,6 +45,13 @@ class StorageService:
         logger.debug("Uploaded %s to bucket %s", path, self._bucket)
         return path
 
+    def download_file(self, path: str) -> bytes:
+        """Return the raw bytes of the object stored at `path`."""
+        response = self._client.get_object(Bucket=self._bucket, Key=path)
+        body: bytes = response["Body"].read()
+        logger.debug("Downloaded %s from bucket %s", path, self._bucket)
+        return body
+
     def get_presigned_url(self, path: str, expires: int = 3600) -> str:
         """Return a presigned URL valid for `expires` seconds."""
         url: str = self._client.generate_presigned_url(

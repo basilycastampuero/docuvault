@@ -34,6 +34,17 @@ class TestStorageService:
         )
         assert path == "org/file.pdf"
 
+    def test_download_file_returns_bytes(self, mock_boto3):
+        body = MagicMock()
+        body.read.return_value = b"file-bytes"
+        mock_boto3.get_object.return_value = {"Body": body}
+        svc = StorageService()
+        data = svc.download_file("org/file.pdf")
+        mock_boto3.get_object.assert_called_once_with(
+            Bucket=svc._bucket, Key="org/file.pdf"
+        )
+        assert data == b"file-bytes"
+
     def test_get_presigned_url_calls_generate(self, mock_boto3):
         mock_boto3.generate_presigned_url.return_value = "https://example.com/signed"
         svc = StorageService()
