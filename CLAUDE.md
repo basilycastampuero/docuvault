@@ -760,7 +760,7 @@ auditoría de fase).
 - [x] drf-spectacular configurado y operativo (0 errors / 0 warnings)
 - [x] Documentación API (Swagger UI en `/api/docs/`, Redoc en `/api/redoc/`)
 
-**Métricas:** 394 tests pasando, cobertura 98% (Fase 3 completa + auditoría, 2026-05-31).
+**Métricas:** 422 tests pasando, cobertura 99% (Fase 4.3 completa, 2026-06-03).
 Nota: los tests requieren PostgreSQL real corriendo (`docker compose up -d`); si falla
 con `connection refused` en `localhost:5432`, la infra está apagada — no es un fallo
 de código.
@@ -799,7 +799,7 @@ de código.
     un campo de texto (name/description/tags/ocr_content). `bulk_create` saltaría el
     signal (caveat para el OCR async de Fase 4).
 
-**Decisiones de diseño cerradas de Fase 4 (PLANIFICADAS, aún no implementadas — ver
+**Decisiones de diseño cerradas de Fase 4 (4.0–4.3 implementadas; 4.4 pendiente — ver
 `docs/phase-plan.md` §4):**
 12. OCR cubre **solo PDF + imágenes** (Tesseract). Office (docx/xlsx/zip) → `ocr_status =
     skipped`. Extracción de texto de Office = trabajo futuro.
@@ -816,8 +816,9 @@ de código.
 18. OCR completion auditado con `UPDATE` + `metadata={"via":"ocr"}` (sin nuevo enum).
 19. **IA (4.4) opcional**, Haiku 4.5, prompt caching, `ANTHROPIC_API_KEY` por env
     (feature-off si falta). Notificaciones y thumbnails → Fase 5.
-20. Falta antes de empezar: `pip` (`pytesseract`, `pdf2image`) + `apt`
+20. Dependencias 4.0 cubiertas: `pip` (`pytesseract`, `pdf2image`) + `apt`
     (`tesseract-ocr tesseract-ocr-spa poppler-utils`) + `StorageService.download_file()`.
+    Pendiente solo instalación manual de binarios apt en entornos nuevos (documentado en `.env.example`).
 21. **`cleanup_orphan_blobs` es tenant-agnóstico** (excepción justificada a la regla
     multi-tenancy). Es una tarea de mantenimiento global del sistema sin `organization`
     ni `user`. Observabilidad por `logger.info`, no por `AuditLog`. `live_paths` en
@@ -844,11 +845,16 @@ de `ocr_service.process()` (imagen vía Pillow+pytesseract, PDF vía pdf2image, 
 guardar `ocr_content` dispara el signal FTS de 3.3 → buscable por contenido sin código extra;
 transitorio (timeout)→retry, permanente (NoSuchKey/corrupto)→failed; endpoint
 `POST /documents/{id}/reprocess-ocr/` (Editor+, 202) vía `document_service.reprocess_ocr`;
-`ocr_status` expuesto read-only. 413 tests, 99%. Tesseract real verificado por smoke test.
+`ocr_status` expuesto read-only. Tesseract real verificado por smoke test.
 
-**Próximo paso:** Fase 4.3 (`cleanup_orphan_blobs`: tarea Beat diaria que borra de MinIO los
-blobs de `Document`/`DocumentVersion` huérfanos, con período de gracia) y 4.4 IA opcional al
-final. Ver `docs/phase-plan.md` §4 para el DoD por sub-fase.
+- [x] **Fase 4.3 (cleanup_orphan_blobs) COMPLETA (2026-06-03):** `StorageService.list_objects()`
+  paginado (boto3 paginator); `cleanup_service.delete_orphan_blobs()` (tenant-agnóstico documentado,
+  fuente de verdad en DB, período de gracia 24h vía `LastModified`); task Beat diaria 03:00 UTC;
+  `ORPHAN_BLOB_GRACE_HOURS` por env. 9 tests nuevos. 422 tests, 99%.
+
+**Próximo paso:** Fase 4.4 (análisis IA opcional con Claude API: `POST /documents/{id}/analyze/`,
+Haiku, prompt caching, feature-flag por `ANTHROPIC_API_KEY`). Ver `docs/phase-plan.md` §4.4
+para el DoD.
 
 Ver `docs/phase-plan.md` para el plan completo de desarrollo.
 

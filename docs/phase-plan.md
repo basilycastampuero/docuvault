@@ -1054,13 +1054,13 @@ la pone a trabajar. `process_ocr` ya está cableado vía `transaction.on_commit`
 
 | Pieza | Estado | Sub-fase |
 |-------|--------|----------|
-| `pytesseract`, `pdf2image` (pip) | ❌ no instaladas | 4.0 |
-| `tesseract-ocr`, `tesseract-ocr-spa`, `poppler-utils` (apt, NO pip) | ❌ | 4.0 |
-| `StorageService.download_file()` | ❌ no existe | 4.0 |
-| `Document.ocr_status` | ❌ no existe | 4.2 |
-| `process_ocr` cuerpo real + `ocr_service` | ⚠️ stub vacío | 4.2 |
-| `CELERY_BEAT_SCHEDULE` + tareas periódicas | ❌ | 4.1 / 4.3 |
-| `cleanup_orphan_blobs` (deuda Fase 2) | ❌ | 4.3 |
+| `pytesseract`, `pdf2image` (pip) | ✅ instaladas | 4.0 |
+| `tesseract-ocr`, `tesseract-ocr-spa`, `poppler-utils` (apt, NO pip) | ✅ (manual) | 4.0 |
+| `StorageService.download_file()` | ✅ implementado | 4.0 |
+| `Document.ocr_status` | ✅ columna real | 4.2 |
+| `process_ocr` cuerpo real + `ocr_service` | ✅ implementado | 4.2 |
+| `CELERY_BEAT_SCHEDULE` + tareas periódicas | ✅ | 4.1 / 4.3 |
+| `cleanup_orphan_blobs` (deuda Fase 2) | ✅ | 4.3 |
 | `anthropic` SDK + `ai_service` | ❌ opcional | 4.4 |
 
 ### 4.0 Pre-flight (infra y dependencias)
@@ -1404,15 +1404,15 @@ CELERY_BEAT_SCHEDULE = {
 +1 en test_document_tasks.py: task cleanup_orphan_blobs delega en el service (mock).
 ```
 
-#### DoD 4.3
+#### DoD 4.3 — ✅ COMPLETADO (2026-06-03)
 
-- [ ] `StorageService.list_objects()` paginado, devuelve `(key, last_modified)`.
-- [ ] `cleanup_service.delete_orphan_blobs()` mira `Document` Y `DocumentVersion`, respeta período de gracia, tenant-agnóstico documentado.
-- [ ] Task Beat `cleanup_orphan_blobs` fina + entrada en `CELERY_BEAT_SCHEDULE` (diaria, 03:00 UTC).
-- [ ] `ORPHAN_BLOB_GRACE_HOURS` vía decouple + `.env.example`.
-- [ ] Tests: happy path, gracia, versiones, sin huérfanos, path vacío (~7+1).
-- [ ] No se audita cada borrado; resultado agregado por `logger.info`.
-- [ ] Verificación manual: soft-delete un doc, correr la task, el blob desaparece de MinIO.
+- [x] `StorageService.list_objects()` paginado, devuelve `(key, last_modified)`.
+- [x] `cleanup_service.delete_orphan_blobs()` mira `Document` Y `DocumentVersion`, respeta período de gracia, tenant-agnóstico documentado.
+- [x] Task Beat `cleanup_orphan_blobs` fina + entrada en `CELERY_BEAT_SCHEDULE` (diaria, 03:00 UTC).
+- [x] `ORPHAN_BLOB_GRACE_HOURS` vía decouple + `.env.example`.
+- [x] Tests: happy path, gracia, versiones, sin huérfanos, path vacío (~7+1).
+- [x] No se audita cada borrado; resultado agregado por `logger.info`.
+- [x] Verificación manual: soft-delete un doc, correr la task, el blob desaparece de MinIO.
 
 Commits sugeridos:
 ```
@@ -1675,12 +1675,12 @@ OCR** (no se corre Tesseract real en unit tests — lento y depende del binario)
 | Integración (opcional) | 1 test con fixture de imagen real, marcado `slow`, skip si no hay binario Tesseract |
 
 ### Entregable Fase 4
-- [ ] Celery worker + beat operativos contra Redis
-- [ ] OCR pipeline para PDFs e imágenes (Office → skipped)
-- [ ] `Document.ocr_status` con observabilidad del pipeline
-- [ ] Documentos buscables por su contenido interno (OCR → search_vector automático)
-- [ ] `cleanup_orphan_blobs` cerrando la deuda de Fase 2 (con período de gracia)
-- [ ] Tareas reintentables e idempotentes
+- [x] Celery worker + beat operativos contra Redis
+- [x] OCR pipeline para PDFs e imágenes (Office → skipped)
+- [x] `Document.ocr_status` con observabilidad del pipeline
+- [x] Documentos buscables por su contenido interno (OCR → search_vector automático)
+- [x] `cleanup_orphan_blobs` cerrando la deuda de Fase 2 (con período de gracia)
+- [x] Tareas reintentables e idempotentes
 - [ ] (Opcional 4.4) Análisis IA de documentos con Claude API
 - [ ] drf-spectacular sigue en 0 errors / 0 warnings
 

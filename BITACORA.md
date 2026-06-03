@@ -11,9 +11,8 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Fase 4 en curso — 4.0 (pre-flight), 4.1 (endurecimiento de
-> Celery) y 4.2 (pipeline OCR real) completas** (2026-06-02). 413 tests, 99% cobertura.
-> Plan detallado de 4.3 y 4.4 redactado (2026-06-03). Próximo: Fase 4.3 (cleanup_orphan_blobs).
+> Última actualización: **Fase 4 en curso — 4.0, 4.1, 4.2 y 4.3 completas** (2026-06-03).
+> 422 tests, 99% cobertura. Próximo: Fase 4.4 (análisis IA con Claude API, feature-flagged).
 
 ---
 
@@ -1107,6 +1106,36 @@ la lógica, una verificación puntual de que la integración con la herramienta 
 
 ---
 
+## 2026-06-03 — Fase 4.3 completa: cleanup_orphan_blobs
+
+Implementada la tarea Beat diaria que cierra la deuda de Fase 2 (decisión cerrada #5): los
+blobs en MinIO no se borraban al soft-delete un documento. La deuda estaba registrada desde
+Fase 2 y tenía su plan detallado desde la sesión del 2026-06-03.
+
+**Piezas entregadas:**
+- `StorageService.list_objects()` — paginado con boto3 paginator, devuelve
+  `(key, last_modified)`. La encapsulación de boto3 se mantiene: el cleanup nunca habla
+  directamente con el cliente S3.
+- `cleanup_service.delete_orphan_blobs()` — fuente de verdad en DB: construye set de paths
+  vivos de `Document` Y `DocumentVersion` cuyo padre esté vivo, compara con bucket, borra
+  huérfanos. Período de gracia 24h por `LastModified` para no competir con uploads en vuelo.
+- Task Beat `cleanup_orphan_blobs` (thin dispatcher, sin retry — idempotente y diaria).
+- `CELERY_BEAT_SCHEDULE` con entrada 03:00 UTC diaria; `ORPHAN_BLOB_GRACE_HOURS` configurable
+  por env var (default 24h), documentado en `.env.example`.
+- 9 tests nuevos. Suite: 422 tests, 99% cobertura.
+
+**Decisión técnica confirmada:** el cleanup es tenant-agnóstico — única excepción justificada
+a la regla multi-tenancy del proyecto. No hay `organization` ni `user` naturales para una
+tarea de GC de sistema. La tarea actúa sobre el bucket globalmente (los paths ya incluyen
+`{org_id}/` como prefijo; no hay riesgo de cruce entre tenants). Observabilidad por
+`logger.info` con conteo agregado (scanned/deleted/skipped_grace), no por AuditLog.
+
+**`manage.py check`, black, isort, flake8:** todos limpios.
+
+**Próximo:** Fase 4.4 — análisis IA con Claude API (feature-flagged por `ANTHROPIC_API_KEY`).
+
+---
+
 ## 2026-06-03 — Plan detallado de Fases 4.3 y 4.4 redactado por arquitecto
 
 Con las sub-fases 4.0, 4.1 y 4.2 completas, el arquitecto produjo el plan de implementación
@@ -1141,8 +1170,8 @@ Ver `docs/phase-plan.md` §4.3 y §4.4 para el plan completo con contratos, test
 
 - ✅ **OCR real (Fase 4.2 — hecho):** cada documento subido ya es buscable por su contenido
   interno, no solo por su nombre. (Ver la sección de Fase 4.2 más arriba.)
-- **`cleanup_orphan_blobs` (Fase 4.3 — siguiente):** la tarea periódica que borra de MinIO los
-  archivos cuyo documento fue soft-deleted. Deuda conocida desde Fase 2. Plan detallado listo.
+- ✅ **`cleanup_orphan_blobs` (Fase 4.3 — hecho):** tarea Beat diaria que borra de MinIO los
+  archivos cuyo documento fue soft-deleted. Cierra la deuda de Fase 2. (Ver entrada 2026-06-03.)
 - **`bulk_create` salta el signal de búsqueda:** si en Fase 4 el OCR inserta documentos en
   masa, hay que reindexar a mano. Anotado para no olvidarlo.
 - **IA con Claude API (Fase 4.4, opcional):** resumen automático, extracción de entidades
