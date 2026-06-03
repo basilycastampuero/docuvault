@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import IO
 
@@ -65,6 +66,17 @@ class StorageService:
         """Remove a file from storage. No-op if the key does not exist."""
         self._client.delete_object(Bucket=self._bucket, Key=path)
         logger.debug("Deleted %s from bucket %s", path, self._bucket)
+
+    def list_objects(self) -> Iterator[tuple[str, datetime]]:
+        """Yield (key, last_modified) for every object in the bucket, paginated.
+
+        Uses the boto3 paginator (list_objects_v2 caps each page at 1000 keys).
+        last_modified is timezone-aware (UTC) as returned by S3/MinIO.
+        """
+        paginator = self._client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=self._bucket):
+            for obj in page.get("Contents", []):
+                yield obj["Key"], obj["LastModified"]
 
     @staticmethod
     def build_storage_path(org_id: str, document_id: str, filename: str) -> str:

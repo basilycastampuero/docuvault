@@ -1,6 +1,7 @@
 from datetime import timedelta
 from pathlib import Path
 
+from celery.schedules import crontab
 from decouple import Csv, config
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -220,8 +221,15 @@ CELERY_TASK_DEFAULT_RETRY_DELAY = config(
 )
 CELERY_TASK_MAX_RETRIES = config("CELERY_TASK_MAX_RETRIES", default=3, cast=int)
 
-# Periodic tasks (Celery Beat). Populated in Phase 4.3 (cleanup_orphan_blobs).
-CELERY_BEAT_SCHEDULE: dict = {}
+# Grace window for orphan blob cleanup: blobs newer than this are never deleted.
+ORPHAN_BLOB_GRACE_HOURS = config("ORPHAN_BLOB_GRACE_HOURS", default=24, cast=int)
+
+CELERY_BEAT_SCHEDULE = {
+    "cleanup-orphan-blobs-daily": {
+        "task": "apps.documents.tasks.document_tasks.cleanup_orphan_blobs",
+        "schedule": crontab(hour=3, minute=0),  # 03:00 UTC daily
+    },
+}
 
 # ---------------------------------------------------------------------------
 # OCR — Tesseract

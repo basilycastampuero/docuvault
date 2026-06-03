@@ -34,3 +34,11 @@ def process_ocr(self, document_id: str) -> None:
         return
 
     ocr_service.process(document)
+
+
+@shared_task
+def cleanup_orphan_blobs() -> dict:
+    """Daily Beat task. Thin dispatcher → cleanup_service (CLAUDE.md §12)."""
+    from apps.documents.services import cleanup_service
+
+    return cleanup_service.delete_orphan_blobs()
