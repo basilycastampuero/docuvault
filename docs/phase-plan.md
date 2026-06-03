@@ -1241,41 +1241,424 @@ Pillow→Tesseract→Poppler operativa end-to-end (los unit tests mockean el mot
 velocidad/determinismo). El test `test_document_is_searchable_by_ocr_content` cierra el
 DoD: tras el OCR, el documento aparece en `search_documents(q=<palabra del contenido>)`.
 
-### 4.3 Housekeeping periódico (cerrar deuda de Fase 2)
+### 4.3 Housekeeping periódico (cleanup_orphan_blobs) — Plan detallado
 
-*DoD: soft-deleteo un documento, corre la tarea diaria, y su blob (y los de sus versiones)
-desaparecen de MinIO.*
+*DoD: soft-deleteo un documento, corre la tarea diaria, y su blob (y los de sus
+versiones) desaparecen de MinIO.*
+
+#### Decisiones cerradas (no re-discutir durante la implementación)
+
+1. **La fuente de verdad es la DB, no el bucket.** Un blob es huérfano si su key NO
+   está referenciada por NINGÚN `Document` vivo (`storage_path`, `deleted_at IS NULL`)
+   NI por NINGÚN `DocumentVersion` de un documento vivo. Construir el set de paths
+   vivos en memoria y restar. *Razón:* el bucket es global; la key ya incluye
+   `{org_id}/...` y es única.
+2. **Mirar `Document` Y `DocumentVersion`.** Al soft-deletear un documento se
+   huérfanan su blob actual Y los blobs de TODAS sus versiones. *Razón:* cada versión
+   tiene su propio blob (CLAUDE.md §6, deuda #5 de Fase 2).
+3. **`DocumentVersion` se considera vivo solo si su `Document` padre está vivo.** Se
+   filtra `DocumentVersion.objects.filter(document__deleted_at__isnull=True)`.
+4. **Período de gracia de 24h vía `LastModified` del objeto S3.** `list_objects_v2`
+   devuelve `LastModified` (datetime tz-aware) por objeto. NO se borra ningún blob con
+   `LastModified > now - GRACE`. *Razón:* evita borrar un upload en vuelo cuyo commit
+   de DB aún no es visible. Configurable: `ORPHAN_BLOB_GRACE_HOURS` (default 24) vía
+   decouple.
+5. **`list_objects` se añade a `StorageService`**, no se usa boto3 crudo desde el
+   service de cleanup. Devuelve un iterador de `(key, last_modified)` paginado
+   internamente con el `paginator` de boto3.
+6. **La lógica vive en `cleanup_service`, la task es fina** (CLAUDE.md §12). La task
+   Beat solo invoca `cleanup_service.delete_orphan_blobs()`.
+7. **Sin tenant en la firma del cleanup.** Tarea de mantenimiento global del sistema,
+   no una operación de dominio por-organización. Única excepción justificada a "todo
+   recibe organization". Documentar el porqué en el docstring.
+8. **Auditoría: NO se audita cada blob borrado.** No hay `organization` ni `user`
+   natural (acción de sistema global). Se registra el resultado agregado con
+   `logger.info` (cuántos blobs escaneados / borrados / saltados por gracia).
+9. **`cleanup_old_audit_logs` queda FUERA de Fase 4.** Sensible (compliance); se
+   deja documentado como trabajo futuro.
+
+#### Piezas a implementar (rutas exactas)
 
 ```
-cleanup_orphan_blobs()  (Celery Beat, diario):
-    - Lista objetos del bucket (list_objects_v2, paginado).
-    - Un blob es huérfano si su path NO está referenciado por ningún Document vivo
-      (storage_path) NI por ningún DocumentVersion de un documento vivo.
-      ⚠️ Las versiones tienen sus propios blobs: al soft-deletear un documento se
-      huerfanizan el blob actual Y los de todas sus versiones. Mirar ambas tablas.
-    - Período de gracia (ej. 24h): no borrar blobs creados hace menos de X horas,
-      para no competir con uploads en vuelo donde el commit de DB llega tarde.
-
-cleanup_old_audit_logs()  (opcional, mensual) — SENSIBLE (compliance):
-    AuditLog.delete() lanza RuntimeError (inmutable), pero QuerySet.delete() lo
-    saltea. Default deshabilitado / retención muy larga; mejor archivar que borrar.
-    No es core de Fase 4.
+apps/documents/storage/storage_service.py   ← añadir método list_objects()
+apps/documents/services/cleanup_service.py   ← NUEVO: delete_orphan_blobs()
+apps/documents/tasks/document_tasks.py        ← añadir task cleanup_orphan_blobs (fina)
+config/settings/base.py                        ← ORPHAN_BLOB_GRACE_HOURS + CELERY_BEAT_SCHEDULE entry
+backend/.env.example                           ← documentar ORPHAN_BLOB_GRACE_HOURS
+apps/documents/tests/test_cleanup_service.py   ← NUEVO (~7 tests)
+apps/documents/tests/test_document_tasks.py    ← +1 test de la task fina
 ```
 
-### 4.4 Análisis IA con Claude API (OPCIONAL — diferenciador de portafolio)
+#### Contratos
 
-*DoD: POST /api/v1/documents/{id}/analyze/ devuelve resumen + entidades + categoría
-sugerida, guardado en metadata["ai_analysis"].*
+```python
+# storage_service.py — nuevo método
+def list_objects(self) -> Iterator[tuple[str, datetime]]:
+    """Yield (key, last_modified) for every object in the bucket, paginated.
+
+    Uses the boto3 paginator (list_objects_v2 caps each page at 1000 keys).
+    last_modified is timezone-aware (UTC) as returned by S3/MinIO.
+    """
+    paginator = self._client.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=self._bucket):
+        for obj in page.get("Contents", []):
+            yield obj["Key"], obj["LastModified"]
+```
+
+```python
+# apps/documents/services/cleanup_service.py — NUEVO
+def delete_orphan_blobs(grace_hours: int | None = None) -> dict:
+    """Delete blobs in the bucket not referenced by any live Document or
+    DocumentVersion. System-wide maintenance: deliberately tenant-agnostic
+    (no request, no organization). Returns a summary dict for logging.
+
+    A blob is kept if EITHER:
+      - it is referenced by a live Document.storage_path, OR
+      - it is referenced by a DocumentVersion.storage_path whose parent
+        Document is alive, OR
+      - it was modified less than grace_hours ago (upload-in-flight guard).
+    """
+    grace = grace_hours if grace_hours is not None else settings.ORPHAN_BLOB_GRACE_HOURS
+    cutoff = timezone.now() - timedelta(hours=grace)
+
+    live_paths: set[str] = set(
+        Document.objects.values_list("storage_path", flat=True)
+    )
+    live_paths.update(
+        DocumentVersion.objects
+        .filter(document__deleted_at__isnull=True)
+        .values_list("storage_path", flat=True)
+    )
+    live_paths.discard("")
+
+    storage = StorageService()
+    scanned = deleted = skipped_grace = 0
+    for key, last_modified in storage.list_objects():
+        scanned += 1
+        if key in live_paths:
+            continue
+        if last_modified > cutoff:
+            skipped_grace += 1
+            continue
+        storage.delete_file(key)
+        deleted += 1
+
+    summary = {"scanned": scanned, "deleted": deleted, "skipped_grace": skipped_grace}
+    logger.info("cleanup_orphan_blobs: %s", summary)
+    return summary
+```
+
+> **Nota de escala:** `live_paths` se materializa en memoria. Para volúmenes de
+> portafolio es trivial. Si el corpus creciera a millones de blobs, la mejora sería
+> barrer por prefijo `{org_id}/` y comparar contra sets por-tenant. Out of scope
+> de Fase 4; dejar un comentario en el código.
+
+```python
+# apps/documents/tasks/document_tasks.py
+@shared_task
+def cleanup_orphan_blobs() -> dict:
+    """Daily Beat task. Thin dispatcher → cleanup_service (CLAUDE.md §12)."""
+    from apps.documents.services import cleanup_service
+    return cleanup_service.delete_orphan_blobs()
+```
+
+#### Configuración Beat (`config/settings/base.py`)
+
+```python
+from celery.schedules import crontab
+
+ORPHAN_BLOB_GRACE_HOURS = config("ORPHAN_BLOB_GRACE_HOURS", default=24, cast=int)
+
+CELERY_BEAT_SCHEDULE = {
+    "cleanup-orphan-blobs-daily": {
+        "task": "apps.documents.tasks.document_tasks.cleanup_orphan_blobs",
+        "schedule": crontab(hour=3, minute=0),  # 03:00 UTC diario
+    },
+}
+```
+
+> El nombre de la task es el path completo del módulo (así lo registra Celery con
+> `autodiscover_tasks` sin `name=` explícito; verificar con
+> `celery -A config.celery inspect registered`). En `config/settings/test.py` el
+> schedule puede quedar vacío para no arrastrar Beat a los tests.
+
+#### Algoritmo (resumen)
+
+1. Calcular `cutoff = now - grace_hours`.
+2. `live_paths` = union de `Document.storage_path` (vivos) + `DocumentVersion.storage_path` de versiones cuyo documento está vivo. Quitar `""`.
+3. Por cada `(key, last_modified)` del bucket (paginado): si `key in live_paths` → conservar; elif `last_modified > cutoff` → conservar (gracia); else → `delete_file(key)`, contar.
+4. Loggear `{scanned, deleted, skipped_grace}`.
+
+#### Tests (`test_cleanup_service.py`, ~7)
+
+`StorageService` mockeado por monkeypatch. `Document`/`DocumentVersion` reales en DB (factories + PostgreSQL).
 
 ```
-Endpoint → tarea analyze_document → ai_service.analyze(document):
-    - SDK anthropic, modelo Haiku 4.5 (claude-haiku-4-5) por costo en extracción.
-    - Input: ocr_content (truncado a un presupuesto de tokens); requiere contenido.
-    - Prompt caching del system prompt (instrucciones de extracción) → reduce costo.
-    - Output JSON: {summary, entities: {dates, amounts, names}, suggested_category}
-      → metadata["ai_analysis"].
-    - ANTHROPIC_API_KEY vía decouple, NUNCA hardcodeado. Sin key → 503 (feature off).
-    - Auditado.
+- happy path: doc soft-deleted → su blob se borra; blob de doc vivo → conservado.
+- versiones: doc vivo con 2 versiones → los 3 paths se conservan.
+- doc soft-deleted con versiones → blobs del doc Y de sus versiones se borran.
+- período de gracia: blob huérfano pero inside window → NO se borra (skipped_grace++).
+- sin huérfanos: bucket == live_paths → deleted == 0.
+- storage_path vacío ("") → nunca se borra accidentalmente.
+- summary devuelto tiene los conteos correctos.
++1 en test_document_tasks.py: task cleanup_orphan_blobs delega en el service (mock).
+```
+
+#### DoD 4.3
+
+- [ ] `StorageService.list_objects()` paginado, devuelve `(key, last_modified)`.
+- [ ] `cleanup_service.delete_orphan_blobs()` mira `Document` Y `DocumentVersion`, respeta período de gracia, tenant-agnóstico documentado.
+- [ ] Task Beat `cleanup_orphan_blobs` fina + entrada en `CELERY_BEAT_SCHEDULE` (diaria, 03:00 UTC).
+- [ ] `ORPHAN_BLOB_GRACE_HOURS` vía decouple + `.env.example`.
+- [ ] Tests: happy path, gracia, versiones, sin huérfanos, path vacío (~7+1).
+- [ ] No se audita cada borrado; resultado agregado por `logger.info`.
+- [ ] Verificación manual: soft-delete un doc, correr la task, el blob desaparece de MinIO.
+
+Commits sugeridos:
+```
+feat(documents): add StorageService.list_objects with pagination
+feat(documents): add cleanup_service.delete_orphan_blobs (orphan blob GC)
+feat(documents): schedule daily cleanup_orphan_blobs Beat task
+test(documents): add tests for orphan blob cleanup
+```
+
+---
+
+### 4.4 Análisis IA con Claude API (opcional, diferenciador de portafolio) — Plan detallado
+
+*DoD: `POST /api/v1/documents/{id}/analyze/` devuelve resumen + entidades + categoría
+sugerida, guardado en `metadata["ai_analysis"]`.*
+
+#### Decisiones cerradas (no re-discutir durante la implementación)
+
+1. **Feature-flag por env var.** `ANTHROPIC_API_KEY` vía decouple (default `""`). Si
+   está vacía, la feature está OFF: el service lanza `AIServiceUnavailable` → **503**.
+   El código queda 100% implementado; el usuario activa poniendo la key. NUNCA
+   hardcodear la key (CLAUDE.md §10, §16).
+2. **Modelo Haiku por costo.** `ANTHROPIC_MODEL` vía decouple, default
+   `claude-haiku-4-5-20251001`. Centralizado en settings (cambiar modelo = cambiar env
+   var). Confirmar el ID exacto con el skill `claude-api` al implementar.
+3. **Prompt caching del system prompt.** El system prompt (instrucciones de extracción +
+   esquema de salida) es estable → se marca con `cache_control: {"type": "ephemeral"}`.
+   El `ocr_content` va en el `user` message (variable, NO cacheado).
+4. **Input truncado a `AI_MAX_INPUT_CHARS`** (default 12000 chars ≈ 3000 tokens). Si
+   `ocr_content` está vacío → `ConflictError(code="AI_NO_CONTENT")` (falla rápido en el
+   request, no en el worker).
+5. **Salida JSON estructurada:** `{summary, entities: {dates, amounts, names}, suggested_category}`. `json.loads` del texto del modelo; si falla → `TransientError` (reintentable). Validación ligera (defaults vacíos para claves faltantes).
+6. **Resultado en `metadata["ai_analysis"]`** (JSONB existente). Guardar con
+   `update_fields=["metadata", "updated_at"]`. El signal FTS de 3.3 NO se dispara
+   (metadata no es campo de texto indexado). Incluir `ai_analysis_at` (ISO timestamp)
+   dentro del dict.
+7. **Endpoint asíncrono (202), no síncrono.** `POST /analyze/` valida, dispara la task
+   via `transaction.on_commit` y devuelve **202** (mismo patrón que `reprocess-ocr`).
+   El resultado se consulta en `GET /documents/{id}/`.
+8. **Permiso Editor+** (`IsOrganizationMember` + `_require_editor`): mismo gate que
+   reprocess-ocr.
+9. **Auditoría: `AuditAction.UPDATE` + `metadata={"via": "ai_analysis"}`** (sin enum
+   nuevo, precedente del OCR §4.2 decisión 18). Auditado desde el service.
+10. **Cliente Anthropic instanciado dentro de la función** (no a nivel de módulo) para
+    que la ausencia de key no rompa imports ni tests que no tocan IA. SDK `anthropic`
+    fijado en `requirements.txt`.
+
+#### Piezas a implementar (rutas exactas)
+
+```
+backend/requirements.txt                        ← añadir anthropic (versión fijada)
+config/settings/base.py                          ← ANTHROPIC_API_KEY, ANTHROPIC_MODEL, AI_MAX_INPUT_CHARS
+backend/.env.example                             ← documentar las 3 vars (key vacía por defecto)
+apps/core/exceptions.py                          ← AIServiceUnavailable (503, ApplicationError)
+apps/documents/services/ai_service.py            ← NUEVO: analyze(document)
+apps/documents/services/document_service.py       ← NUEVO: request_ai_analysis(org, user, document)
+apps/documents/tasks/document_tasks.py             ← NUEVO task analyze_document (fina, reintentable)
+apps/documents/api/views.py                         ← NUEVO DocumentAnalyzeView
+apps/documents/api/urls.py                           ← ruta documents/<uuid>/analyze/
+apps/documents/api/serializers.py                     ← AiAnalysisSerializer (read, para schema)
+apps/documents/tests/test_ai_service.py               ← NUEVO (~8 tests, mock anthropic)
+apps/documents/tests/test_api.py                       ← +tests del endpoint (~4)
+apps/documents/tests/test_document_tasks.py             ← +1 test task fina
+```
+
+#### Diseño del service (`apps/documents/services/ai_service.py`)
+
+```python
+def analyze(document: "Document") -> dict:
+    """Run Claude analysis over a document's OCR content and persist the result
+    in document.metadata['ai_analysis']. Returns the analysis dict.
+
+    Feature-flagged: raises AIServiceUnavailable (503) if ANTHROPIC_API_KEY is unset.
+    Raises ConflictError if the document has no OCR content to analyze.
+    Raises TransientError on a malformed model response (Celery will retry).
+    """
+    if not settings.ANTHROPIC_API_KEY:
+        raise AIServiceUnavailable()
+
+    content = (document.ocr_content or "").strip()
+    if not content:
+        raise ConflictError("Document has no OCR content", code="AI_NO_CONTENT")
+
+    truncated = content[: settings.AI_MAX_INPUT_CHARS]
+
+    # Instantiated here (not module-level): missing key must not break imports.
+    import anthropic
+    client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+    response = client.messages.create(
+        model=settings.ANTHROPIC_MODEL,
+        max_tokens=1024,
+        system=[
+            {
+                "type": "text",
+                "text": _SYSTEM_PROMPT,                 # stable → cacheable
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+        messages=[{"role": "user", "content": truncated}],
+    )
+
+    analysis = _parse_response(response)   # json.loads → TransientError si falla
+    analysis["ai_analysis_at"] = timezone.now().isoformat()
+
+    document.metadata["ai_analysis"] = analysis
+    document.save(update_fields=["metadata", "updated_at"])
+
+    audit_service.log(
+        organization=document.organization,
+        user=None,
+        entity_type="document",
+        entity_id=str(document.pk),
+        action=AuditAction.UPDATE,
+        metadata={"via": "ai_analysis"},
+    )
+    return analysis
+```
+
+```python
+# _SYSTEM_PROMPT (constante de módulo, estable → cacheado en Anthropic)
+# Instruye: "Eres un extractor de información. Devuelve SOLO JSON válido con
+# esta forma exacta: {\"summary\": str, \"entities\": {\"dates\": [str],
+# \"amounts\": [str], \"names\": [str]}, \"suggested_category\": str}.
+# Sin texto fuera del JSON."
+
+# _parse_response(response) -> dict:
+#   text = response.content[0].text
+#   try: data = json.loads(text)
+#   except (json.JSONDecodeError, IndexError, AttributeError):
+#       raise TransientError("AI returned malformed JSON")
+#   normaliza: asegura claves con defaults vacíos si faltan.
+```
+
+> **Al implementar, invocar el skill `claude-api`** para confirmar la firma exacta
+> de `messages.create`, el formato de `system` con `cache_control`, el acceso a
+> `response.content[0].text` y el ID de modelo vigente.
+
+```python
+# document_service.request_ai_analysis(organization, user, document) -> Document
+#   - chequea settings.ANTHROPIC_API_KEY → si vacío, raise AIServiceUnavailable()
+#     (falla rápido en el request, no en el worker)
+#   - valida que document.ocr_content no esté vacío → ConflictError AI_NO_CONTENT
+#   - transaction.on_commit(lambda: analyze_document.delay(str(document.id)))
+#   - return document
+```
+
+```python
+# apps/documents/tasks/document_tasks.py
+@shared_task(
+    bind=True,
+    autoretry_for=(TransientError,),
+    retry_backoff=True,
+    retry_jitter=True,
+    retry_kwargs={"max_retries": settings.CELERY_TASK_MAX_RETRIES},
+)
+def analyze_document(self, document_id: str) -> None:
+    """Thin dispatcher → ai_service.analyze (CLAUDE.md §12)."""
+    from apps.documents.models import Document
+    from apps.documents.services import ai_service
+    try:
+        document = Document.objects.get(id=document_id)
+    except Document.DoesNotExist:
+        logger.warning("analyze_document: document %s not found; skipping", document_id)
+        return
+    ai_service.analyze(document)
+```
+
+#### Endpoint (`POST /api/v1/documents/{id}/analyze/`)
+
+```python
+@extend_schema(tags=["Documents"])
+class DocumentAnalyzeView(APIView):
+    permission_classes = [IsOrganizationMember]
+
+    @extend_schema(
+        summary="Request AI analysis for a document",
+        request=None,
+        responses={202: DocumentSerializer},
+    )
+    def post(self, request, document_id) -> Response:
+        FolderListCreateView._require_editor(request)
+        doc = get_document_by_id(
+            organization=request.organization, document_id=document_id
+        )
+        doc = document_service.request_ai_analysis(
+            organization=request.organization, user=request.user, document=doc
+        )
+        return Response(
+            {"data": DocumentSerializer(doc).data}, status=status.HTTP_202_ACCEPTED
+        )
+```
+
+- **Quién:** Editor+ (`org_admin`, `supervisor`, `editor`).
+- **Async (202):** el análisis corre en el worker; el resultado se lee en `GET /documents/{id}/` → `metadata.ai_analysis`.
+- **Ruta en `urls.py`:** `documents/<uuid:document_id>/analyze/`, name `document-analyze`.
+- `DocumentSerializer` ya expone `metadata`; `AiAnalysisSerializer` opcional solo para documentar el shape en drf-spectacular (0 warnings objetivo).
+
+#### Configuración (`config/settings/base.py`)
+
+```python
+ANTHROPIC_API_KEY = config("ANTHROPIC_API_KEY", default="")
+ANTHROPIC_MODEL   = config("ANTHROPIC_MODEL", default="claude-haiku-4-5-20251001")
+AI_MAX_INPUT_CHARS = config("AI_MAX_INPUT_CHARS", default=12000, cast=int)
+```
+
+`.env.example`: las 3 vars con `ANTHROPIC_API_KEY=` vacío + comentario "Dejar vacía para desactivar análisis IA (devuelve 503). Completar para habilitar la feature."
+
+#### Tests (`test_ai_service.py`, ~8) — cliente anthropic siempre mockeado
+
+```
+- happy path: analyze devuelve dict con summary/entities/suggested_category;
+  metadata["ai_analysis"] persistido; ai_analysis_at presente; audit UPDATE via=ai_analysis.
+- sin key (ANTHROPIC_API_KEY="") → AIServiceUnavailable.
+- ocr_content vacío → ConflictError AI_NO_CONTENT.
+- respuesta malformada (no-JSON) → TransientError.
+- truncado: ocr_content > AI_MAX_INPUT_CHARS → cliente recibe texto truncado (assert arg).
+- system prompt lleva cache_control ephemeral (assert sobre el arg de create).
+- guardar metadata NO dispara signal FTS (search_vector no cambia).
+- auditoría: organización correcta del documento en el AuditLog.
+test_api.py (+4): editor → 202; viewer → 403; no auth → 401;
+  sin key → 503 AI_SERVICE_UNAVAILABLE; tenant isolation (doc otra org → 404).
+test_document_tasks.py (+1): analyze_document delega en ai_service (mock);
+  doc inexistente → no-op sin error.
+```
+
+#### DoD 4.4
+
+- [ ] `anthropic` en `requirements.txt` (versión fijada).
+- [ ] `AIServiceUnavailable` en `apps/core/exceptions.py` (status 503).
+- [ ] `ai_service.analyze`: Haiku, prompt caching, input truncado, salida JSON validada → `metadata["ai_analysis"]`.
+- [ ] Feature-flag: sin key → 503 `AI_SERVICE_UNAVAILABLE`. Key nunca hardcodeada.
+- [ ] Task `analyze_document` fina (delega en service), reintentable.
+- [ ] `POST /api/v1/documents/{id}/analyze/` (Editor+, 202 async).
+- [ ] Análisis auditado (`UPDATE` + `metadata.via=ai_analysis`).
+- [ ] Tests con cliente anthropic mockeado; cero llamadas reales.
+- [ ] drf-spectacular 0 errors / 0 warnings.
+- [ ] La feature activa cuando el usuario añade la key (configuración manual suya).
+
+Commits sugeridos:
+```
+chore(documents): add anthropic SDK and AI settings (feature-flagged)
+feat(core): add AIServiceUnavailable (503) exception
+feat(documents): add ai_service.analyze with Claude + prompt caching
+feat(documents): add analyze_document task and analyze endpoint
+test(documents): add tests for ai_service and analyze endpoint (mocked SDK)
 ```
 
 ### Estrategia de tests

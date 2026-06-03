@@ -818,6 +818,14 @@ de código.
     (feature-off si falta). Notificaciones y thumbnails → Fase 5.
 20. Falta antes de empezar: `pip` (`pytesseract`, `pdf2image`) + `apt`
     (`tesseract-ocr tesseract-ocr-spa poppler-utils`) + `StorageService.download_file()`.
+21. **`cleanup_orphan_blobs` es tenant-agnóstico** (excepción justificada a la regla
+    multi-tenancy). Es una tarea de mantenimiento global del sistema sin `organization`
+    ni `user`. Observabilidad por `logger.info`, no por `AuditLog`. `live_paths` en
+    memoria; gracia vía `LastModified` S3 (`ORPHAN_BLOB_GRACE_HOURS=24`).
+22. **IA (4.4) implementada pero feature-off por defecto.** `ANTHROPIC_API_KEY` vacía →
+    503. Modelo Haiku, prompt caching del system prompt, output JSON en
+    `metadata["ai_analysis"]`. Endpoint async 202. `AIServiceUnavailable` (503) en
+    `apps/core/exceptions.py`. Activar poniendo la key en `.env`.
 
 **4.0 (pre-flight) COMPLETA (2026-06-02, rama `feature/celery-ocr-pipeline`):** deps pip
 fijadas (`pdf2image`, `pytesseract`); `StorageService.download_file()` + test; settings

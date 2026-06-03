@@ -13,7 +13,7 @@
 >
 > Última actualización: **Fase 4 en curso — 4.0 (pre-flight), 4.1 (endurecimiento de
 > Celery) y 4.2 (pipeline OCR real) completas** (2026-06-02). 413 tests, 99% cobertura.
-> Próximo: Fase 4.3 (limpieza de archivos huérfanos).
+> Plan detallado de 4.3 y 4.4 redactado (2026-06-03). Próximo: Fase 4.3 (cleanup_orphan_blobs).
 
 ---
 
@@ -1107,16 +1107,47 @@ la lógica, una verificación puntual de que la integración con la herramienta 
 
 ---
 
+## 2026-06-03 — Plan detallado de Fases 4.3 y 4.4 redactado por arquitecto
+
+Con las sub-fases 4.0, 4.1 y 4.2 completas, el arquitecto produjo el plan de implementación
+detallado para las dos sub-fases restantes de la Fase 4.
+
+**Fase 4.3 — `cleanup_orphan_blobs`:** cierra la deuda de diseño de Fase 2 (los blobs en
+MinIO no se borran al soft-deletear un documento). La tarea Beat diaria a las 03:00 UTC
+recorre el bucket, calcula qué paths no están referenciados por ningún `Document` ni
+`DocumentVersion` vivo, y los borra. La decisión más importante: **la fuente de verdad es
+la DB, no el bucket** — se construye el set de paths vivos en memoria y se resta. También
+se incorporó un período de gracia de 24h (configurable vía `ORPHAN_BLOB_GRACE_HOURS`) para
+no borrar accidentalmente blobs de uploads en vuelo cuyo commit de DB aún no fue visible.
+Una segunda decisión clave: la tarea es **tenant-agnóstica** — es mantenimiento global del
+sistema, no una operación de dominio. Excepción justificada y documentada a la regla
+multi-tenant. Sin auditoría por blob; solo `logger.info` con conteo agregado.
+
+**Fase 4.4 — Análisis IA con Claude API (opcional):** diferenciador de portafolio. Endpoint
+`POST /documents/{id}/analyze/` que dispara una tarea Celery que llama a Claude (Haiku) y
+guarda el resultado en `metadata["ai_analysis"]`. La característica más importante del diseño
+es el **feature-flag completo**: `ANTHROPIC_API_KEY=` vacía → el código existe y el endpoint
+existe, pero devuelve 503. El usuario activa la feature poniendo la key en su `.env`. Esto
+significa que el código puede mergearse y desplegarse sin key, sin riesgo. Mismo patrón async
+202 que `reprocess-ocr`. Prompt caching del system prompt (instrucciones estables) → reduce
+costo en llamadas repetidas. Nueva excepción `AIServiceUnavailable` (503) en
+`apps/core/exceptions.py`.
+
+Ver `docs/phase-plan.md` §4.3 y §4.4 para el plan completo con contratos, tests y DoD.
+
+---
+
 ## Ideas y pendientes anotados (para no perderlos)
 
 - ✅ **OCR real (Fase 4.2 — hecho):** cada documento subido ya es buscable por su contenido
   interno, no solo por su nombre. (Ver la sección de Fase 4.2 más arriba.)
 - **`cleanup_orphan_blobs` (Fase 4.3 — siguiente):** la tarea periódica que borra de MinIO los
-  archivos cuyo documento fue soft-deleted. Deuda conocida desde Fase 2.
+  archivos cuyo documento fue soft-deleted. Deuda conocida desde Fase 2. Plan detallado listo.
 - **`bulk_create` salta el signal de búsqueda:** si en Fase 4 el OCR inserta documentos en
   masa, hay que reindexar a mano. Anotado para no olvidarlo.
-- **IA con Claude API (Fase 4.3, opcional):** resumen automático, extracción de entidades
+- **IA con Claude API (Fase 4.4, opcional):** resumen automático, extracción de entidades
   (fechas, montos, nombres), categorización sugerida. Es el "diferenciador de portafolio".
+  Plan detallado listo; activar con `ANTHROPIC_API_KEY`.
 - **Stemming por idioma:** si algún día importa que "contrato" matchee "contratos", se puede
   configurar FTS por-tenant según su idioma.
 
