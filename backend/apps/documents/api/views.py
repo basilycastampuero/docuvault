@@ -350,6 +350,35 @@ class DocumentReprocessOcrView(APIView):
 
 
 @extend_schema(tags=["Documents"])
+class DocumentAnalyzeView(APIView):
+    permission_classes = [IsOrganizationMember]
+
+    @extend_schema(
+        summary="Request AI analysis for a document (async)",
+        description=(
+            "Enqueues an AI analysis job. Returns 202 immediately. "
+            "Result appears in document.metadata.ai_analysis once complete. "
+            "Requires ANTHROPIC_API_KEY to be configured (returns 503 otherwise)."
+        ),
+        request=None,
+        responses={202: DocumentSerializer},
+    )
+    def post(self, request: Request, document_id) -> Response:
+        FolderListCreateView._require_editor(request)
+        doc = get_document_by_id(
+            organization=request.organization, document_id=document_id
+        )
+        doc = document_service.request_ai_analysis(
+            organization=request.organization,
+            user=request.user,
+            document=doc,
+        )
+        return Response(
+            {"data": DocumentSerializer(doc).data}, status=status.HTTP_202_ACCEPTED
+        )
+
+
+@extend_schema(tags=["Documents"])
 class DocumentVersionListView(APIView):
     permission_classes = [IsOrganizationMember]
     parser_classes = [MultiPartParser, FormParser]

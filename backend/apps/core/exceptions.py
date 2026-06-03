@@ -53,6 +53,14 @@ class ConflictError(ApplicationError):
     status_code = status.HTTP_409_CONFLICT
 
 
+class AIServiceUnavailableError(ApplicationError):
+    default_code = "AI_SERVICE_UNAVAILABLE"
+    default_message = (
+        "AI analysis is not available. Configure ANTHROPIC_API_KEY to enable it."
+    )
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
+
 class TransientError(Exception):
     """Recoverable failure that should trigger a Celery task retry.
 

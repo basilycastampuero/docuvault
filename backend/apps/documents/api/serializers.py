@@ -110,3 +110,22 @@ class DocumentVersionUploadSerializer(serializers.Serializer):
     change_description = serializers.CharField(
         max_length=500, required=False, allow_blank=True, default=""
     )
+
+
+# ---------------------------------------------------------------------------
+# AI analysis — used only for drf-spectacular schema documentation.
+# The actual result lives inside Document.metadata["ai_analysis"] (JSONB).
+# ---------------------------------------------------------------------------
+
+
+class AiAnalysisEntitiesSerializer(serializers.Serializer):
+    dates = serializers.ListField(child=serializers.CharField(), read_only=True)
+    amounts = serializers.ListField(child=serializers.CharField(), read_only=True)
+    names = serializers.ListField(child=serializers.CharField(), read_only=True)
+
+
+class AiAnalysisSerializer(serializers.Serializer):
+    summary = serializers.CharField(read_only=True)
+    entities = AiAnalysisEntitiesSerializer(read_only=True)
+    suggested_category = serializers.CharField(read_only=True)
+    ai_analysis_at = serializers.DateTimeField(read_only=True)

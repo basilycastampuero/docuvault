@@ -36,6 +36,34 @@ def process_ocr(self, document_id: str) -> None:
     ocr_service.process(document)
 
 
+@shared_task(
+    bind=True,
+    autoretry_for=(TransientError,),
+    retry_backoff=True,
+    retry_jitter=True,
+    retry_kwargs={"max_retries": settings.CELERY_TASK_MAX_RETRIES},
+)
+def analyze_document(self, document_id: str) -> None:
+    """Run AI analysis for a document.
+
+    Thin dispatcher (CLAUDE.md §12): the logic lives in ai_service. Retries only
+    on TransientError (recoverable, e.g. malformed model response); any other
+    exception propagates and the task is marked failed without retrying. A missing
+    document is treated as permanent — the on_commit hook may have fired for a
+    transaction that rolled back.
+    """
+    from apps.documents.models import Document
+    from apps.documents.services import ai_service
+
+    try:
+        document = Document.objects.get(id=document_id)
+    except Document.DoesNotExist:
+        logger.warning("analyze_document: document %s not found; skipping", document_id)
+        return
+
+    ai_service.analyze(document)
+
+
 @shared_task
 def cleanup_orphan_blobs() -> dict:
     """Daily Beat task. Thin dispatcher → cleanup_service (CLAUDE.md §12)."""

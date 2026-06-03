@@ -242,6 +242,16 @@ OCR_LANGUAGES = config("OCR_LANGUAGES", default="spa+eng")
 OCR_PDF_DPI = config("OCR_PDF_DPI", default=200, cast=int)
 
 # ---------------------------------------------------------------------------
+# AI Analysis (Claude API) — optional feature, disabled when key is empty
+# ---------------------------------------------------------------------------
+
+# Leave empty to disable AI analysis (endpoint returns 503). Set to enable.
+ANTHROPIC_API_KEY = config("ANTHROPIC_API_KEY", default="")
+ANTHROPIC_MODEL = config("ANTHROPIC_MODEL", default="claude-haiku-4-5")
+# Input characters sent to the model (truncated if longer). ~3000 tokens.
+AI_MAX_INPUT_CHARS = config("AI_MAX_INPUT_CHARS", default=12000, cast=int)
+
+# ---------------------------------------------------------------------------
 # Static & Media
 # ---------------------------------------------------------------------------
 

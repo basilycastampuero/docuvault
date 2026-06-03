@@ -354,3 +354,77 @@ class TestReprocessOcr:
             f"/api/v1/documents/{doc_a.id}/reprocess-ocr/"
         )
         assert response.status_code == 404
+
+
+@pytest.mark.django_db(transaction=True)
+class TestDocumentAnalyze:
+    def test_editor_returns_202_with_envelope(
+        self, settings, django_capture_on_commit_callbacks
+    ):
+        """Editor role gets 202 with {data: {...}} envelope; task is dispatched."""
+        settings.ANTHROPIC_API_KEY = "sk-test-key"
+        org = OrganizationFactory()
+        user = _editor(org)
+        doc = DocumentFactory(organization=org, created_by=user, ocr_content="text")
+        with patch(
+            "apps.documents.tasks.document_tasks.analyze_document.delay"
+        ) as mock_delay:
+            with django_capture_on_commit_callbacks(execute=True):
+                response = _client_for(user).post(
+                    f"/api/v1/documents/{doc.id}/analyze/"
+                )
+        assert response.status_code == 202
+        body = response.json()
+        assert "data" in body
+        assert body["data"]["id"] == str(doc.id)
+        mock_delay.assert_called_once_with(str(doc.id))
+
+    def test_viewer_returns_403(self, settings):
+        """Viewer role is rejected."""
+        settings.ANTHROPIC_API_KEY = "sk-test-key"
+        org = OrganizationFactory()
+        doc = DocumentFactory(organization=org, ocr_content="text")
+        response = _client_for(_viewer(org)).post(
+            f"/api/v1/documents/{doc.id}/analyze/"
+        )
+        assert response.status_code == 403
+
+    def test_unauthenticated_returns_401(self):
+        """Unauthenticated request is rejected."""
+        org = OrganizationFactory()
+        doc = DocumentFactory(organization=org)
+        assert (
+            APIClient().post(f"/api/v1/documents/{doc.id}/analyze/").status_code == 401
+        )
+
+    def test_missing_key_returns_503(self, settings):
+        """When ANTHROPIC_API_KEY is empty the endpoint returns 503."""
+        settings.ANTHROPIC_API_KEY = ""
+        org = OrganizationFactory()
+        user = _editor(org)
+        doc = DocumentFactory(organization=org, created_by=user, ocr_content="text")
+        response = _client_for(user).post(f"/api/v1/documents/{doc.id}/analyze/")
+        assert response.status_code == 503
+        body = response.json()
+        assert body["error"]["code"] == "AI_SERVICE_UNAVAILABLE"
+
+    def test_no_ocr_content_returns_409(self, settings):
+        """Document with empty ocr_content returns 409 AI_NO_CONTENT."""
+        settings.ANTHROPIC_API_KEY = "sk-test-key"
+        org = OrganizationFactory()
+        user = _editor(org)
+        doc = DocumentFactory(organization=org, created_by=user, ocr_content="")
+        response = _client_for(user).post(f"/api/v1/documents/{doc.id}/analyze/")
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "AI_NO_CONTENT"
+
+    def test_tenant_isolation_returns_404(self, settings):
+        """Document belonging to another org returns 404."""
+        settings.ANTHROPIC_API_KEY = "sk-test-key"
+        org_a = OrganizationFactory()
+        org_b = OrganizationFactory()
+        doc_a = DocumentFactory(organization=org_a, ocr_content="text")
+        response = _client_for(_editor(org_b)).post(
+            f"/api/v1/documents/{doc_a.id}/analyze/"
+        )
+        assert response.status_code == 404

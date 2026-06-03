@@ -5,7 +5,11 @@ import pytest
 from celery.exceptions import Retry
 
 from apps.core.exceptions import TransientError
-from apps.documents.tasks.document_tasks import cleanup_orphan_blobs, process_ocr
+from apps.documents.tasks.document_tasks import (
+    analyze_document,
+    cleanup_orphan_blobs,
+    process_ocr,
+)
 from apps.documents.tests.factories import DocumentFactory
 
 # Tasks run synchronously here (CELERY_TASK_ALWAYS_EAGER + EAGER_PROPAGATES). In
@@ -50,6 +54,35 @@ class TestProcessOcrTask:
             result = process_ocr.apply(args=[str(uuid.uuid4())])
         assert result.successful()
         mock_process.assert_not_called()
+
+
+@pytest.mark.django_db
+class TestAnalyzeDocumentTask:
+    def test_delegates_to_ai_service(self):
+        """Thin task: must call ai_service.analyze with the document."""
+        doc = DocumentFactory()
+        with patch("apps.documents.services.ai_service.analyze") as mock_analyze:
+            result = analyze_document.apply(args=[str(doc.id)])
+        assert result.successful()
+        mock_analyze.assert_called_once()
+        assert mock_analyze.call_args.args[0].id == doc.id
+
+    def test_missing_document_skips_without_error(self):
+        """A doc that does not exist causes the task to skip gracefully."""
+        with patch("apps.documents.services.ai_service.analyze") as mock_analyze:
+            result = analyze_document.apply(args=[str(uuid.uuid4())])
+        assert result.successful()
+        mock_analyze.assert_not_called()
+
+    def test_transient_error_triggers_retry(self):
+        """TransientError from ai_service routes through the retry machinery."""
+        doc = DocumentFactory()
+        with patch(
+            "apps.documents.services.ai_service.analyze",
+            side_effect=TransientError("model timeout"),
+        ):
+            with pytest.raises(Retry):
+                analyze_document.apply(args=[str(doc.id)])
 
 
 class TestCleanupOrphanBlobsTask:

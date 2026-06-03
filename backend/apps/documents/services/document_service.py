@@ -1,11 +1,16 @@
 import logging
 from typing import IO, TYPE_CHECKING
 
+from django.conf import settings
 from django.db import transaction
 
 from apps.audit.models import AuditAction
 from apps.audit.services import audit_service
-from apps.core.exceptions import ConflictError, PermissionDenied
+from apps.core.exceptions import (
+    AIServiceUnavailableError,
+    ConflictError,
+    PermissionDenied,
+)
 from apps.documents.models import Document, DocumentStatus, DocumentVersion, Folder
 from apps.documents.storage import StorageService, validate_file
 from apps.documents.tasks.document_tasks import process_ocr
@@ -246,6 +251,32 @@ def reprocess_ocr(
     )
     transaction.on_commit(lambda: process_ocr.delay(str(document.id)))
     logger.info("OCR reprocess requested: %s (org=%s)", document.id, organization.id)
+    return document
+
+
+def request_ai_analysis(
+    organization: "Organization",
+    user: "User",
+    document: Document,
+) -> Document:
+    """Validate and enqueue AI analysis for a document. Returns the document unchanged.
+
+    Fails fast (in the request) if the feature is disabled or the document has
+    no OCR content — better than silently failing inside the worker.
+    """
+    if not settings.ANTHROPIC_API_KEY:
+        raise AIServiceUnavailableError()
+
+    if not (document.ocr_content or "").strip():
+        raise ConflictError(
+            "Document has no OCR content to analyze", code="AI_NO_CONTENT"
+        )
+
+    # Lazy import avoids circular dependency between document_service and tasks.
+    from apps.documents.tasks.document_tasks import analyze_document
+
+    transaction.on_commit(lambda: analyze_document.delay(str(document.id)))
+    logger.info("AI analysis enqueued: %s (org=%s)", document.id, organization.id)
     return document
 
 

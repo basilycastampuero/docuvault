@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (
+    DocumentAnalyzeView,
     DocumentDetailView,
     DocumentDownloadView,
     DocumentListCreateView,
@@ -45,5 +46,10 @@ urlpatterns = [
         "documents/<uuid:document_id>/reprocess-ocr/",
         DocumentReprocessOcrView.as_view(),
         name="document-reprocess-ocr",
+    ),
+    path(
+        "documents/<uuid:document_id>/analyze/",
+        DocumentAnalyzeView.as_view(),
+        name="document-analyze",
     ),
 ]
