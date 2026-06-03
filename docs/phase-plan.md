@@ -1061,7 +1061,7 @@ la pone a trabajar. `process_ocr` ya está cableado vía `transaction.on_commit`
 | `process_ocr` cuerpo real + `ocr_service` | ✅ implementado | 4.2 |
 | `CELERY_BEAT_SCHEDULE` + tareas periódicas | ✅ | 4.1 / 4.3 |
 | `cleanup_orphan_blobs` (deuda Fase 2) | ✅ | 4.3 |
-| `anthropic` SDK + `ai_service` | ❌ opcional | 4.4 |
+| `anthropic` SDK + `ai_service` | ✅ implementado | 4.4 |
 
 ### 4.0 Pre-flight (infra y dependencias)
 
@@ -1639,18 +1639,18 @@ test_document_tasks.py (+1): analyze_document delega en ai_service (mock);
   doc inexistente → no-op sin error.
 ```
 
-#### DoD 4.4
+#### DoD 4.4 — ✅ COMPLETADO (2026-06-03)
 
-- [ ] `anthropic` en `requirements.txt` (versión fijada).
-- [ ] `AIServiceUnavailable` en `apps/core/exceptions.py` (status 503).
-- [ ] `ai_service.analyze`: Haiku, prompt caching, input truncado, salida JSON validada → `metadata["ai_analysis"]`.
-- [ ] Feature-flag: sin key → 503 `AI_SERVICE_UNAVAILABLE`. Key nunca hardcodeada.
-- [ ] Task `analyze_document` fina (delega en service), reintentable.
-- [ ] `POST /api/v1/documents/{id}/analyze/` (Editor+, 202 async).
-- [ ] Análisis auditado (`UPDATE` + `metadata.via=ai_analysis`).
-- [ ] Tests con cliente anthropic mockeado; cero llamadas reales.
-- [ ] drf-spectacular 0 errors / 0 warnings.
-- [ ] La feature activa cuando el usuario añade la key (configuración manual suya).
+- [x] `anthropic` en `requirements.txt` (versión fijada).
+- [x] `AIServiceUnavailable` en `apps/core/exceptions.py` (status 503).
+- [x] `ai_service.analyze`: Haiku, prompt caching, input truncado, salida JSON validada → `metadata["ai_analysis"]`.
+- [x] Feature-flag: sin key → 503 `AI_SERVICE_UNAVAILABLE`. Key nunca hardcodeada.
+- [x] Task `analyze_document` fina (delega en service), reintentable.
+- [x] `POST /api/v1/documents/{id}/analyze/` (Editor+, 202 async).
+- [x] Análisis auditado (`UPDATE` + `metadata.via=ai_analysis`).
+- [x] Tests con cliente anthropic mockeado; cero llamadas reales.
+- [x] drf-spectacular 0 errors / 0 warnings.
+- [x] La feature activa cuando el usuario añade la key (configuración manual suya).
 
 Commits sugeridos:
 ```
@@ -1681,8 +1681,8 @@ OCR** (no se corre Tesseract real en unit tests — lento y depende del binario)
 - [x] Documentos buscables por su contenido interno (OCR → search_vector automático)
 - [x] `cleanup_orphan_blobs` cerrando la deuda de Fase 2 (con período de gracia)
 - [x] Tareas reintentables e idempotentes
-- [ ] (Opcional 4.4) Análisis IA de documentos con Claude API
-- [ ] drf-spectacular sigue en 0 errors / 0 warnings
+- [x] (Opcional 4.4) Análisis IA de documentos con Claude API
+- [x] drf-spectacular sigue en 0 errors / 0 warnings
 
 ### Pasos futuros (post-Fase 4)
 - **Fase 5:** frontend, CI/CD, deploy VPS, observabilidad (Sentry), notificaciones (email en

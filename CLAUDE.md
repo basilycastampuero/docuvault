@@ -695,9 +695,7 @@ fix/{name}    ← Corrección de bugs
 
 ## 17. Estado actual del proyecto
 
-**Fase actual:** Fase 4 EN CURSO. 4.0 (pre-flight) + 4.1 (Celery hardening) + 4.2 (pipeline
-OCR) COMPLETAS; siguiente: 4.3 (`cleanup_orphan_blobs`). Fase 3 COMPLETA (3.1 + 3.2 + 3.3 +
-auditoría de fase).
+**Fase actual:** Fase 4 COMPLETA. Fase 5 (Frontend + Deploy + Observabilidad) es el siguiente gran hito.
 
 **Completado:**
 - [x] **Fase 0** — Setup completo: WSL2, Docker Compose (PG16 + Redis7 + MinIO),
@@ -760,7 +758,7 @@ auditoría de fase).
 - [x] drf-spectacular configurado y operativo (0 errors / 0 warnings)
 - [x] Documentación API (Swagger UI en `/api/docs/`, Redoc en `/api/redoc/`)
 
-**Métricas:** 422 tests pasando, cobertura 99% (Fase 4.3 completa, 2026-06-03).
+**Métricas:** 442 tests pasando, cobertura 99% (Fase 4 completa, 2026-06-03).
 Nota: los tests requieren PostgreSQL real corriendo (`docker compose up -d`); si falla
 con `connection refused` en `localhost:5432`, la infra está apagada — no es un fallo
 de código.
@@ -799,8 +797,7 @@ de código.
     un campo de texto (name/description/tags/ocr_content). `bulk_create` saltaría el
     signal (caveat para el OCR async de Fase 4).
 
-**Decisiones de diseño cerradas de Fase 4 (4.0–4.3 implementadas; 4.4 pendiente — ver
-`docs/phase-plan.md` §4):**
+**Decisiones de diseño cerradas de Fase 4 (todas implementadas — ver `docs/phase-plan.md` §4):**
 12. OCR cubre **solo PDF + imágenes** (Tesseract). Office (docx/xlsx/zip) → `ocr_status =
     skipped`. Extracción de texto de Office = trabajo futuro.
 13. **`ocr_status` es columna real** (CharField + choices: pending/processing/completed/
@@ -851,10 +848,9 @@ transitorio (timeout)→retry, permanente (NoSuchKey/corrupto)→failed; endpoin
   paginado (boto3 paginator); `cleanup_service.delete_orphan_blobs()` (tenant-agnóstico documentado,
   fuente de verdad en DB, período de gracia 24h vía `LastModified`); task Beat diaria 03:00 UTC;
   `ORPHAN_BLOB_GRACE_HOURS` por env. 9 tests nuevos. 422 tests, 99%.
+- [x] **Fase 4.4 (análisis IA — opcional) COMPLETA (2026-06-03):** `ai_service.analyze()` con Claude Haiku + prompt caching; feature-flag (`ANTHROPIC_API_KEY` vacía → 503); `POST /documents/{id}/analyze/` (Editor+, 202 async); resultado en `metadata["ai_analysis"]`; sin nueva migración (JSONB existente). 442 tests, 99%.
 
-**Próximo paso:** Fase 4.4 (análisis IA opcional con Claude API: `POST /documents/{id}/analyze/`,
-Haiku, prompt caching, feature-flag por `ANTHROPIC_API_KEY`). Ver `docs/phase-plan.md` §4.4
-para el DoD.
+**Próximo paso:** Fase 5 — Frontend React + TypeScript + Vite + Tailwind + shadcn/ui, CI/CD (GitHub Actions), deploy VPS, observabilidad (Sentry), notificaciones email en workflows. Ver `docs/phase-plan.md` §5 para el plan.
 
 Ver `docs/phase-plan.md` para el plan completo de desarrollo.
 

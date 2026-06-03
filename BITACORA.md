@@ -11,8 +11,8 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Fase 4 en curso — 4.0, 4.1, 4.2 y 4.3 completas** (2026-06-03).
-> 422 tests, 99% cobertura. Próximo: Fase 4.4 (análisis IA con Claude API, feature-flagged).
+> Última actualización: **Fase 4 COMPLETA** (2026-06-03). 442 tests, 99% cobertura.
+> Próximo hito: Fase 5 (Frontend React, CI/CD, deploy VPS, Sentry, notificaciones).
 
 ---
 
@@ -1103,6 +1103,45 @@ Aparte, hice **una prueba manual con Tesseract real**: generé una imagen con la
 "CONTRATO ARRENDAMIENTO" y confirmé que el motor la lee. Esa separación —lógica con mocks,
 binario real verificado a mano— es la práctica estándar: tests rápidos y deterministas para
 la lógica, una verificación puntual de que la integración con la herramienta externa funciona.
+
+---
+
+## 2026-06-03 — Fase 4 COMPLETA: Celery + OCR + Housekeeping + IA opcional
+
+Cerrada la Fase 4 completa con la entrega de 4.4 (análisis IA con Claude API).
+
+**Resumen de la Fase 4 (todas las sub-fases):**
+- **4.0 Pre-flight:** deps pip (pytesseract, pdf2image), `StorageService.download_file()`, settings OCR/Celery.
+- **4.1 Celery hardening:** `TransientError`, `process_ocr` con retry_backoff, task fina.
+- **4.2 Pipeline OCR:** `Document.ocr_status`, `ocr_service.process()` real, endpoint reprocess-ocr.
+- **4.3 Housekeeping:** `cleanup_orphan_blobs` Beat diaria, cierra deuda de Fase 2 (#5).
+- **4.4 IA opcional:** `ai_service.analyze()` con Haiku + prompt caching, feature-flag por `ANTHROPIC_API_KEY`.
+
+**Métricas finales Fase 4:** 442 tests, 99% cobertura, 0 warnings en drf-spectacular.
+
+**Decisión confirmada:** la IA queda implementada pero inactiva hasta que el usuario añada
+`ANTHROPIC_API_KEY` al `.env`. Sin key → 503. El código está listo para activar sin cambios.
+
+**Siguiente hito:** Fase 5 — Frontend React, CI/CD, deploy VPS, Sentry, notificaciones email.
+
+---
+
+## 2026-06-03 — Fase 4.4 completa: análisis IA con Claude API
+
+Implementado el análisis IA de documentos como feature opcional diferenciadora de portafolio.
+
+**Piezas entregadas:**
+- `AIServiceUnavailableError` (503) en `apps/core/exceptions.py`.
+- `ai_service.analyze()`: Claude Haiku, prompt caching del system prompt (`cache_control: ephemeral`),
+  truncado a 12000 chars, output JSON estructurado → `metadata["ai_analysis"]`, audit via=ai_analysis.
+- `document_service.request_ai_analysis()`: validación fail-fast en el request (no en el worker).
+- Task `analyze_document`: thin dispatcher, reintentable por `TransientError`.
+- `POST /api/v1/documents/{id}/analyze/` (Editor+, 202 async). Resultado en `GET /documents/{id}/`.
+- 20 tests nuevos. Sin nueva migración (usa JSONB `metadata` existente).
+
+**Decisión técnica:** el cliente `anthropic.Anthropic(...)` se instancia dentro de la función
+(no a nivel de módulo) para que un `ANTHROPIC_API_KEY` ausente no rompa el arranque de Django
+ni los tests que no tocan IA. El import de `anthropic` también es local a la función.
 
 ---
 
