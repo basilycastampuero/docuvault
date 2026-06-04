@@ -21,16 +21,49 @@ CSRF_COOKIE_SECURE = True
 
 CORS_ALLOWED_ORIGINS = config("CORS_ALLOWED_ORIGINS", default="", cast=Csv())
 
-# Sentry
+# ---------------------------------------------------------------------------
+# Logging — switch console handler to JSON formatter for log aggregators
+# ---------------------------------------------------------------------------
+
+LOGGING["handlers"]["console"]["formatter"] = "json"  # noqa: F405
+
+# ---------------------------------------------------------------------------
+# Sentry — error tracking (disabled when SENTRY_DSN is empty)
+# ---------------------------------------------------------------------------
+
 SENTRY_DSN = config("SENTRY_DSN", default="")
+SENTRY_ENVIRONMENT = config("SENTRY_ENVIRONMENT", default="production")
+
 if SENTRY_DSN:
     import sentry_sdk
     from sentry_sdk.integrations.celery import CeleryIntegration
     from sentry_sdk.integrations.django import DjangoIntegration
 
+    def _scrub_sensitive_headers(event: dict, hint: dict) -> dict | None:
+        """Strip Authorization header and /auth/ request bodies before sending to Sentry.
+
+        GDPR / CLAUDE.md §10: never expose credentials to third parties.
+        """
+        request = event.get("request", {})
+
+        # Remove Authorization header from all requests.
+        headers = request.get("headers", {})
+        headers.pop("Authorization", None)
+        headers.pop("authorization", None)
+
+        # Remove request body for auth endpoints (may contain passwords).
+        url = request.get("url", "")
+        if "/auth/" in url:
+            request.pop("data", None)
+            request.pop("body", None)
+
+        return event
+
     sentry_sdk.init(
         dsn=SENTRY_DSN,
+        environment=SENTRY_ENVIRONMENT,
         integrations=[DjangoIntegration(), CeleryIntegration()],
         traces_sample_rate=0.1,
-        send_default_pii=False,
+        send_default_pii=False,  # GDPR: do not send IPs or emails by default
+        before_send=_scrub_sensitive_headers,
     )

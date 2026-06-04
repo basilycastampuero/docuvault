@@ -289,16 +289,30 @@ CORS_ALLOWED_ORIGINS: list[str] = []
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
+    "filters": {
+        "request_context": {
+            "()": "apps.core.logging.RequestContextFilter",
+        },
+    },
     "formatters": {
         "verbose": {
             "format": "[{levelname}] {asctime} {name} {module}: {message}",
             "style": "{",
+        },
+        # Used in production — every record is a JSON line parseable by log aggregators.
+        "json": {
+            "()": "pythonjsonlogger.json.JsonFormatter",
+            "format": (
+                "%(asctime)s %(name)s %(levelname)s %(message)s "
+                "%(organization_id)s %(user_id)s %(request_id)s"
+            ),
         },
     },
     "handlers": {
         "console": {
             "class": "logging.StreamHandler",
             "formatter": "verbose",
+            "filters": ["request_context"],
         },
     },
     "root": {
