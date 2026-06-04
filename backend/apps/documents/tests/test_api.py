@@ -337,6 +337,7 @@ class TestReprocessOcr:
                 )
         assert response.status_code == 202
         mock_delay.assert_called_once_with(str(doc.id))
+        assert response.json()["data"]["ocr_status"] == "pending"
 
     def test_viewer_cannot_reprocess(self):
         org = OrganizationFactory()

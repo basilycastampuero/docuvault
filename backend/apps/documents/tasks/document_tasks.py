@@ -1,7 +1,6 @@
 import logging
 
 from celery import shared_task
-from django.conf import settings
 
 from apps.core.exceptions import TransientError
 
@@ -13,7 +12,7 @@ logger = logging.getLogger(__name__)
     autoretry_for=(TransientError,),
     retry_backoff=True,
     retry_jitter=True,
-    retry_kwargs={"max_retries": settings.CELERY_TASK_MAX_RETRIES},
+    max_retries=3,
 )
 def process_ocr(self, document_id: str) -> None:
     """Run OCR for a document.
@@ -41,7 +40,7 @@ def process_ocr(self, document_id: str) -> None:
     autoretry_for=(TransientError,),
     retry_backoff=True,
     retry_jitter=True,
-    retry_kwargs={"max_retries": settings.CELERY_TASK_MAX_RETRIES},
+    max_retries=3,
 )
 def analyze_document(self, document_id: str) -> None:
     """Run AI analysis for a document.

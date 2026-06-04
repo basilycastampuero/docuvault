@@ -11,7 +11,13 @@ from apps.core.exceptions import (
     ConflictError,
     PermissionDenied,
 )
-from apps.documents.models import Document, DocumentStatus, DocumentVersion, Folder
+from apps.documents.models import (
+    Document,
+    DocumentStatus,
+    DocumentVersion,
+    Folder,
+    OcrStatus,
+)
 from apps.documents.storage import StorageService, validate_file
 from apps.documents.tasks.document_tasks import process_ocr
 
@@ -241,6 +247,9 @@ def reprocess_ocr(
 ) -> Document:
     """Re-trigger the OCR pipeline for a document. The task is dispatched after
     commit so the worker never picks it up before this transaction is durable."""
+    document.ocr_status = OcrStatus.PENDING
+    document.save(update_fields=["ocr_status", "updated_at"])
+
     audit_service.log(
         organization=organization,
         user=user,

@@ -52,18 +52,25 @@ def analyze(document: "Document") -> dict:
 
     client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
-    response = client.messages.create(
-        model=settings.ANTHROPIC_MODEL,
-        max_tokens=1024,
-        system=[
-            {
-                "type": "text",
-                "text": _SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
-        messages=[{"role": "user", "content": truncated}],
-    )
+    try:
+        response = client.messages.create(
+            model=settings.ANTHROPIC_MODEL,
+            max_tokens=1024,
+            system=[
+                {
+                    "type": "text",
+                    "text": _SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            messages=[{"role": "user", "content": truncated}],
+        )
+    except (
+        anthropic.RateLimitError,
+        anthropic.APITimeoutError,
+        anthropic.APIConnectionError,
+    ) as exc:
+        raise TransientError(f"Anthropic API transient error: {exc}") from exc
 
     analysis = _parse_response(response)
     analysis["ai_analysis_at"] = timezone.now().isoformat()

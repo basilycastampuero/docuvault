@@ -197,3 +197,47 @@ class TestAiServiceAnalyze:
 
         log = AuditLog.objects.filter(entity_id=str(doc.pk)).last()
         assert log.organization_id == doc.organization_id
+
+    def test_rate_limit_error_raises_transient_error(self, settings):
+        """Anthropic RateLimitError should be wrapped as TransientError for Celery retry."""
+        settings.ANTHROPIC_API_KEY = "sk-test-key"
+        doc = DocumentFactory(ocr_content="Some text.")
+        import anthropic as anthropic_sdk
+
+        mock_client = MagicMock()
+        mock_client.messages.create.side_effect = anthropic_sdk.RateLimitError(
+            message="rate limit exceeded",
+            response=MagicMock(status_code=429),
+            body={},
+        )
+        with patch("anthropic.Anthropic", return_value=mock_client):
+            with pytest.raises(TransientError):
+                ai_service.analyze(doc)
+
+    def test_api_timeout_error_raises_transient_error(self, settings):
+        """Anthropic APITimeoutError should be wrapped as TransientError for Celery retry."""
+        settings.ANTHROPIC_API_KEY = "sk-test-key"
+        doc = DocumentFactory(ocr_content="Some text.")
+        import anthropic as anthropic_sdk
+
+        mock_client = MagicMock()
+        mock_client.messages.create.side_effect = anthropic_sdk.APITimeoutError(
+            request=MagicMock()
+        )
+        with patch("anthropic.Anthropic", return_value=mock_client):
+            with pytest.raises(TransientError):
+                ai_service.analyze(doc)
+
+    def test_api_connection_error_raises_transient_error(self, settings):
+        """Anthropic APIConnectionError should be wrapped as TransientError for Celery retry."""
+        settings.ANTHROPIC_API_KEY = "sk-test-key"
+        doc = DocumentFactory(ocr_content="Some text.")
+        import anthropic as anthropic_sdk
+
+        mock_client = MagicMock()
+        mock_client.messages.create.side_effect = anthropic_sdk.APIConnectionError(
+            request=MagicMock()
+        )
+        with patch("anthropic.Anthropic", return_value=mock_client):
+            with pytest.raises(TransientError):
+                ai_service.analyze(doc)
