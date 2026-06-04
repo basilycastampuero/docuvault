@@ -86,7 +86,7 @@ See `docs/manual-testing.md` for step-by-step curl examples testing all features
 
 ## Status
 
-Active development — **Phase 3 complete.** Next: Phase 4 (Celery + OCR + AI).
+Active development — **Phase 5 in progress (5.6 complete).** Next: Phase 5.1 (React frontend).
 
 | Phase | Scope | Status |
 |-------|-------|--------|
@@ -96,10 +96,11 @@ Active development — **Phase 3 complete.** Next: Phase 4 (Celery + OCR + AI).
 | 3.1 | Audit read API with filters and role-based access | ✅ Complete |
 | 3.2 | Workflow engine (templates, steps, executions, approval flows) | ✅ Complete |
 | 3.3 | Full-text search with PostgreSQL tsvector + GIN | ✅ Complete |
-| 4 | Celery pipelines + OCR + AI analysis | 📅 Planned |
-| 5 | Frontend + Deploy + Observability | 📅 Planned |
+| 4 | Celery pipelines + OCR + AI analysis (Claude Haiku) | ✅ Complete |
+| 5.6 | Observability: health check, Sentry, JSON logging | ✅ Complete |
+| 5.1–5.5, 5.7 | Frontend, CI/CD, deploy, notifications | 🔄 In progress |
 
-**394 tests passing, 98% coverage.**
+**501 tests passing, 99% coverage.**
 
 ---
 

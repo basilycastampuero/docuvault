@@ -11,8 +11,8 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Fase 4 COMPLETA** (2026-06-04). 445 tests, 99% cobertura.
-> Próximo hito: Fase 5 (Frontend React, CI/CD, deploy VPS, Sentry, notificaciones).
+> Última actualización: **Fase 5.6 COMPLETA** (2026-06-04). 501 tests, 99% cobertura.
+> Próximo hito: Fase 5.1 (scaffold frontend React+TS+Vite, login con JWT).
 
 ---
 
@@ -1103,6 +1103,45 @@ Aparte, hice **una prueba manual con Tesseract real**: generé una imagen con la
 "CONTRATO ARRENDAMIENTO" y confirmé que el motor la lee. Esa separación —lógica con mocks,
 binario real verificado a mano— es la práctica estándar: tests rápidos y deterministas para
 la lógica, una verificación puntual de que la integración con la herramienta externa funciona.
+
+---
+
+## 2026-06-04 — Fase 5.6 completa: health check + Sentry + JSON logging
+
+Primera sub-fase de Fase 5 completada — toda la infraestructura de observabilidad del backend.
+
+**Piezas entregadas:**
+- `GET /api/v1/health/` en `apps/core/api/health_view.py`: público, `AllowAny`,
+  `authentication_classes=[]`, sin envelope `{data, meta}` (excepción documentada en
+  CLAUDE.md decisión #24).
+- `apps/core/services/health_service.py`: `check_health()` agrega tres checkers;
+  ningún checker propaga excepciones (siempre devuelven "ok"/"error").
+- `apps/core/logging.py`: `RequestContextFilter` + `set_request_context`/`clear_request_context`
+  via thread-local; JSON formatter activo en production.py.
+- Sentry: init condicional a `SENTRY_DSN`, scrubbing de headers de auth, `CeleryIntegration`.
+- 56 tests nuevos. Suite: 501 tests, 99%.
+
+**Deuda técnica conocida:** `RequestContextFilter` popula los campos solo cuando el middleware
+llame a `set_request_context()` — pendiente de integrar en `OrganizationTenantMiddleware` (Fase 5.x).
+
+**Estado de la rama:** `develop`, limpia.
+
+---
+
+## 2026-06-04 — Sesión: auditoría Fase 4, merge, plan Fase 5, Fase 5.6
+
+**Resumen de la sesión:**
+- Auditoría completa de Fase 4: sin bugs críticos, 3 advertencias corregidas (ver
+  decisión #23 en CLAUDE.md): (a) `ai_service` mapea `RateLimitError`/`APITimeoutError`/
+  `APIConnectionError` del SDK Anthropic a `TransientError`; (b) `reprocess_ocr` resetea
+  `ocr_status` a `PENDING` antes del `on_commit`; (c) `max_retries=3` inline en decoradores.
+- Merge `feature/celery-ocr-pipeline` → `develop` (fast-forward, 17 commits).
+- Plan completo de Fase 5 documentado: 7 sub-fases (5.1 Frontend→5.7 Notificaciones).
+- Fase 5.6 implementada y testeada: health check, Sentry, JSON logging.
+
+**Métricas:** 501 tests, 99% cobertura.
+**Próximo:** Fase 5.1 — scaffold frontend React+TS+Vite (usuario con poca experiencia
+frontend, requerirá guía detallada).
 
 ---
 

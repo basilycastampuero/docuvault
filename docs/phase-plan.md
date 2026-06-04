@@ -1698,7 +1698,7 @@ OCR** (no se corre Tesseract real en unit tests — lento y depende del binario)
 **Objetivo:** cerrar el círculo del proyecto de portafolio: una SPA React que consume la
 API ya construida, un pipeline de CI que protege `main`, un despliegue real con HTTPS en un
 VPS, observabilidad de producción (errores + logs + health) y la primera integración de
-side-effects de workflow (email al siguiente revisor). El backend está al 100% (445 tests,
+side-effects de workflow (email al siguiente revisor). El backend está al 100% (501 tests,
 99%); esta fase NO añade dominio nuevo salvo `apps/notifications` (5.7).
 
 **Estimación global:** 6–8 semanas de calendario. ~70–90 tests nuevos (backend
@@ -1714,7 +1714,7 @@ como ~40–60 tests de UI). Meta de cobertura backend: mantener ≥ 95%.
 | 5.3 | Frontend workflows + auditoría | — | ✅ | — |
 | 5.4 | CI/CD GitHub Actions | ✅ (config) | ✅ (build) | — |
 | 5.5 | Deploy VPS (Gunicorn+Nginx+SSL) | ✅ (settings prod) | ✅ (build estático) | ✅ |
-| 5.6 | Observabilidad (Sentry, logs, health) | ✅ | ✅ | — |
+| 5.6 | Observabilidad (Sentry, logs, health) — **COMPLETA (backend)** | ✅ | ✅ | — |
 | 5.7 | Notificaciones email en workflows | ✅ (`apps/notifications`) | — | — |
 
 ### Decisiones globales de Fase 5 (cerradas — no re-discutir durante la implementación)
@@ -2342,14 +2342,15 @@ infra: cuenta Sentry (free tier) → 2 DSN (backend, frontend)
 
 #### DoD
 
-- [ ] `GET /api/v1/health/` devuelve 200 con `{database, redis, storage}` cuando todo está
+- [x] `GET /api/v1/health/` devuelve 200 con `{database, redis, storage}` cuando todo está
       sano; 503 si algún componente falla; público y no auditado.
-- [ ] Sentry backend captura una excepción no manejada en prod con contexto (sin PII, sin
+- [x] Sentry backend captura una excepción no manejada en prod con contexto (sin PII, sin
       Authorization header); desactivado si `SENTRY_DSN` vacío.
 - [ ] Sentry frontend captura un error de render vía ErrorBoundary; desactivado sin DSN.
-- [ ] Logs en JSON en producción con `organization_id`/`user_id`/`request_id` cuando aplica;
+      *(pendiente: parte frontend se implementa en 5.1)*
+- [x] Logs en JSON en producción con `organization_id`/`user_id`/`request_id` cuando aplica;
       formato legible en dev.
-- [ ] Tests del health service (db/redis/storage ok → 200; cada componente caído → 503) y de
+- [x] Tests del health service (db/redis/storage ok → 200; cada componente caído → 503) y de
       que el endpoint no requiere auth ni genera audit log.
 
 #### Commits sugeridos

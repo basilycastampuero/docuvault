@@ -695,7 +695,7 @@ fix/{name}    ← Corrección de bugs
 
 ## 17. Estado actual del proyecto
 
-**Fase actual:** Fase 4 COMPLETA. Fase 5 (Frontend + CI/CD + Deploy + Observabilidad) planificada — ver `docs/phase-plan.md` §5 para el plan detallado con 7 sub-fases.
+**Fase actual:** Fase 5 EN CURSO. 5.6 (observabilidad) COMPLETA; siguiente: 5.1 (Frontend setup + auth). Plan completo de 7 sub-fases documentado en `docs/phase-plan.md` §5.
 
 **Completado:**
 - [x] **Fase 0** — Setup completo: WSL2, Docker Compose (PG16 + Redis7 + MinIO),
@@ -758,7 +758,7 @@ fix/{name}    ← Corrección de bugs
 - [x] drf-spectacular configurado y operativo (0 errors / 0 warnings)
 - [x] Documentación API (Swagger UI en `/api/docs/`, Redoc en `/api/redoc/`)
 
-**Métricas:** 445 tests pasando, cobertura 99% (Fase 4 completa, 2026-06-04).
+**Métricas:** 501 tests pasando, cobertura 99% (Fase 5.6 completa, 2026-06-04).
 Nota: los tests requieren PostgreSQL real corriendo (`docker compose up -d`); si falla
 con `connection refused` en `localhost:5432`, la infra está apagada — no es un fallo
 de código.
@@ -824,6 +824,26 @@ de código.
     503. Modelo Haiku, prompt caching del system prompt, output JSON en
     `metadata["ai_analysis"]`. Endpoint async 202. `AIServiceUnavailable` (503) en
     `apps/core/exceptions.py`. Activar poniendo la key en `.env`.
+23. **Post-auditoría Fase 4 (2026-06-04):** correcciones aplicadas — (a) excepciones
+    transitorias del SDK Anthropic (`RateLimitError`, `APITimeoutError`,
+    `APIConnectionError`) se mapean a `TransientError` en `ai_service`; (b)
+    `reprocess_ocr` resetea `ocr_status = PENDING` antes del `on_commit`; (c)
+    `max_retries=3` fijo en decoradores de tasks (no desde settings evaluado al decorar).
+
+**Decisiones de diseño cerradas de Fase 5 (las que ya están implementadas):**
+24. **`GET /api/v1/health/` es la única excepción al envelope estándar `{data, meta}`**
+    (además del tenant-agnostic cleanup). Razón: compatibilidad con health checkers
+    externos (Nginx, UptimeRobot). `authentication_classes=[]` — no parsea JWT en
+    este endpoint.
+25. **Health check no se audita.** Es una consulta de sistema sin `organization` ni
+    `user`. Confirmado con test explícito.
+26. **Sentry gateado por `SENTRY_DSN` vacío** (igual que `ANTHROPIC_API_KEY`). Sin
+    DSN → sin inicialización. `send_default_pii=False` (GDPR). Scrubbing de
+    `Authorization` header y bodies de `/auth/`.
+27. **JSON logging solo en `production.py`**, texto plano en desarrollo.
+    `RequestContextFilter` inyecta `organization_id`/`user_id`/`request_id` vía
+    thread-local — requiere que `OrganizationTenantMiddleware` llame a
+    `set_request_context()` (deuda técnica documentada, no bloquea).
 
 **4.0 (pre-flight) COMPLETA (2026-06-02, rama `feature/celery-ocr-pipeline`):** deps pip
 fijadas (`pdf2image`, `pytesseract`); `StorageService.download_file()` + test; settings
@@ -849,8 +869,10 @@ transitorio (timeout)→retry, permanente (NoSuchKey/corrupto)→failed; endpoin
   fuente de verdad en DB, período de gracia 24h vía `LastModified`); task Beat diaria 03:00 UTC;
   `ORPHAN_BLOB_GRACE_HOURS` por env. 9 tests nuevos. 422 tests, 99%.
 - [x] **Fase 4.4 (análisis IA — opcional) COMPLETA (2026-06-03):** `ai_service.analyze()` con Claude Haiku + prompt caching; feature-flag (`ANTHROPIC_API_KEY` vacía → 503); `POST /documents/{id}/analyze/` (Editor+, 202 async); resultado en `metadata["ai_analysis"]`; sin nueva migración (JSONB existente). 442 tests, 99%.
+- [x] **Auditoría de Fase 4 (2026-06-04):** 3 correcciones post-auditoría: `ai_service` mapea errores SDK Anthropic a `TransientError`; `reprocess_ocr` resetea `ocr_status` a `PENDING`; `max_retries=3` inline en decoradores de tasks.
+- [x] **Fase 5.6 (observabilidad) COMPLETA (2026-06-04):** `GET /api/v1/health/` (público, sin envelope); `health_service` con 3 checkers (DB/Redis/MinIO); `RequestContextFilter` para JSON logs; Sentry gateado por `SENTRY_DSN`. 501 tests, 99%.
 
-**Próximo paso:** Fase 5 — comenzar por **5.1 Frontend setup+auth** (React+TS+Vite+Tailwind+shadcn/ui) y **5.6 health check** (puede hacerse en paralelo como primera pieza backend de Fase 5). Ver `docs/phase-plan.md` §5 para el plan completo.
+**Próximo paso:** Fase 5.1 — scaffold React+TS+Vite, Tailwind, shadcn/ui; login con JWT; interceptor de refresh automático. El usuario tiene experiencia limitada en frontend — cada sub-fase de frontend requiere explicación detallada además de implementación.
 
 Ver `docs/phase-plan.md` para el plan completo de desarrollo.
 
