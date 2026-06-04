@@ -543,17 +543,17 @@ Cobertura objetivo: mantener ≥ 95%.
 | `transaction.on_commit` no dispara en tests con `@django_db(transaction=False)` | Tests del dispatch usan `transaction=True` |
 | Blob huérfano si DB falla tras upload exitoso | Conocido: Fase 4 tendrá tarea `cleanup_orphan_blobs` |
 
-### Entregable Fase 2
-- [ ] AuditLog model + audit_service.log funcional
-- [ ] Upload funcional a MinIO con validación de MIME real (magic numbers)
-- [ ] Versionado de documentos
-- [ ] Árbol de carpetas jerárquico con detección de ciclos
-- [ ] Presigned URLs para descarga
-- [ ] Status lock: solo draft ↔ under_review en API; approved/rejected vía workflows
-- [ ] OCR task stub conectado vía `transaction.on_commit`
-- [ ] Tests de upload, versionado y aislamiento de tenant
-- [ ] Índices PostgreSQL aplicados (verificados con `EXPLAIN ANALYZE` antes de mergear)
-- [ ] drf-spectacular schema sigue en 0 errors / 0 warnings
+### Entregable Fase 2 — ✅ COMPLETADO
+- [x] AuditLog model + audit_service.log funcional
+- [x] Upload funcional a MinIO con validación de MIME real (magic numbers)
+- [x] Versionado de documentos
+- [x] Árbol de carpetas jerárquico con detección de ciclos
+- [x] Presigned URLs para descarga
+- [x] Status lock: solo draft ↔ under_review en API; approved/rejected vía workflows
+- [x] OCR task stub conectado vía `transaction.on_commit`
+- [x] Tests de upload, versionado y aislamiento de tenant
+- [x] Índices PostgreSQL aplicados (verificados con `EXPLAIN ANALYZE` antes de mergear)
+- [x] drf-spectacular schema sigue en 0 errors / 0 warnings
 
 ---
 
@@ -1693,90 +1693,841 @@ OCR** (no se corre Tesseract real en unit tests — lento y depende del binario)
 
 ---
 
-## Fase 5 — Frontend + Deploy + Observabilidad
+## Fase 5 — Frontend + CI/CD + Deploy + Observabilidad + Notificaciones
 
-**Objetivo:** Frontend funcional, CI/CD, deploy en VPS, monitoring.
-**Estimación:** 4–5 semanas
+**Objetivo:** cerrar el círculo del proyecto de portafolio: una SPA React que consume la
+API ya construida, un pipeline de CI que protege `main`, un despliegue real con HTTPS en un
+VPS, observabilidad de producción (errores + logs + health) y la primera integración de
+side-effects de workflow (email al siguiente revisor). El backend está al 100% (445 tests,
+99%); esta fase NO añade dominio nuevo salvo `apps/notifications` (5.7).
 
-### 5.1 Frontend React (básico funcional)
+**Estimación global:** 6–8 semanas de calendario. ~70–90 tests nuevos (backend
+notifications + health + logging; el frontend usa Vitest + Testing Library, contados aparte
+como ~40–60 tests de UI). Meta de cobertura backend: mantener ≥ 95%.
+
+**Mapa de sub-fases:**
+
+| Sub-fase | Área | Toca backend | Toca frontend | Toca infra |
+|----------|------|:---:|:---:|:---:|
+| 5.1 | Frontend setup + auth | — | ✅ | — |
+| 5.2 | Frontend gestión documental | — | ✅ | — |
+| 5.3 | Frontend workflows + auditoría | — | ✅ | — |
+| 5.4 | CI/CD GitHub Actions | ✅ (config) | ✅ (build) | — |
+| 5.5 | Deploy VPS (Gunicorn+Nginx+SSL) | ✅ (settings prod) | ✅ (build estático) | ✅ |
+| 5.6 | Observabilidad (Sentry, logs, health) | ✅ | ✅ | — |
+| 5.7 | Notificaciones email en workflows | ✅ (`apps/notifications`) | — | — |
+
+### Decisiones globales de Fase 5 (cerradas — no re-discutir durante la implementación)
+
+1. **Monorepo, dos top-levels.** El frontend vive en `frontend/` a la altura de `backend/`
+   en el repo. NO se crea repo separado. *Razón:* CI/CD y deploy coordinados, un solo
+   historial, coherente con el monolito.
+2. **`apps/notifications` es la ÚNICA app de dominio nueva** y ya existe como skeleton
+   vacío. Notificaciones se modela como dominio (BaseModel + FK a Organization), no como
+   utilidad suelta. `apps/billing` NO se toca en Fase 5 (skeleton dormido, trabajo futuro).
+3. **El frontend NO obtiene su propia decisión de microservicio/BFF.** Llama directo a
+   `/api/v1/`. Nginx sirve el estático y hace proxy de `/api/` al backend (mismo origen en
+   prod → no hay problema de CORS en prod; CORS solo se habilita en dev para Vite).
+4. **Producción usa S3 real (o MinIO containerizado), nunca el MinIO de dev** con
+   credenciales `minioadmin`. Las presigned URLs ya abstraen esto vía `StorageService`.
+5. **El deploy es manual-asistido por script, no GitOps automático a prod.** CI corre
+   lint+test+build en cada PR; el deploy a VPS es un job disparado manualmente
+   (`workflow_dispatch`) o por tag, NO en cada push a `main`. *Razón:* portafolio
+   self-hosted, sin staging; evita romper la demo en vivo con un merge.
+6. **Migraciones en deploy: un solo proceso las corre, los demás esperan.** `migrate` se
+   ejecuta en un servicio one-shot de la compose de prod con
+   `depends_on ... service_completed_successfully`, NUNCA concurrentemente desde N workers
+   Gunicorn.
+
+---
+
+### 5.1 — Frontend: setup y autenticación
+
+**Objetivo.** Levantar el proyecto React+TS+Vite con Tailwind y shadcn/ui, establecer la
+arquitectura de carpetas, el cliente HTTP con renovación automática de JWT, y el flujo de
+login + layout autenticado. Es el cimiento sobre el que se montan 5.2 y 5.3; sin esto nada
+más del frontend se puede construir.
+
+#### Decisiones cerradas
+
+1. **Estructura feature-based**, no layer-based. Cada dominio funcional
+   (`features/auth`, `features/documents`, `features/folders`, `features/workflows`,
+   `features/audit`, `features/search`) agrupa sus componentes, hooks, API y tipos. *Razón:*
+   espeja el monolito modular del backend (cohesión por dominio); evita carpetas
+   `components/` de 80 archivos. Lo transversal va en `shared/` y `lib/`.
+2. **Cliente HTTP: `axios`** (no fetch nativo). *Razón:* los interceptors de request/response
+   son la forma limpia de inyectar el `Authorization` header y de implementar el refresh
+   automático en 401 con cola de requests pendientes — hacerlo a mano con fetch es
+   código frágil reinventado.
+3. **Server state con TanStack Query v5** (`@tanstack/react-query`). Estado de servidor
+   (documentos, carpetas, workflows) es cache, no estado local: Query da caching,
+   invalidación, refetch y polling (necesario para `ocr_status`) gratis.
+4. **UI/client state con Zustand** (solo lo mínimo: sesión de auth, estado de sidebar,
+   toasts). NO meter datos de servidor en Zustand.
+5. **Tokens en memoria + refresh en `localStorage`** para esta fase (NO httpOnly cookies).
+   *Razón:* el backend ya emite `access`+`refresh` JSON por `/auth/login/`; el flujo
+   httpOnly exigiría cambiar el backend a set-cookie y manejar CSRF. Se documenta el
+   trade-off de seguridad (XSS) como deuda consciente; migrar a cookies httpOnly queda para
+   Fase 6. El `access` vive en memoria (Zustand), el `refresh` en `localStorage` para
+   sobrevivir reload.
+6. **Routing con `react-router-dom` v6.4+ (data router, `createBrowserRouter`).** Rutas
+   protegidas vía un `<ProtectedRoute>` que comprueba la sesión de Zustand y redirige a
+   `/login`.
+7. **El envelope `{data, meta}` del backend se desenvuelve en una capa de cliente**
+   (`unwrap()` en `lib/api-client.ts`), de modo que los hooks reciben ya `data`. Los
+   errores `{error: {code, message, details}}` se normalizan a una clase `ApiError`.
+8. **Validación de formularios con `react-hook-form` + `zod`.** El schema zod del login y
+   del upload refleja las reglas del backend (tamaño, tipo) para fallar en cliente antes de
+   gastar una request.
+
+#### Estructura de carpetas (frontend/)
 
 ```
-Stack: React + TypeScript + Vite + Tailwind + shadcn/ui
-
-Páginas mínimas:
-- Login / Logout
-- Dashboard (documentos recientes, stats básicas)
-- File explorer (carpetas + documentos)
-- Upload de documento
-- Detalle de documento (versiones, audit trail)
-- Gestión de usuarios (solo OrgAdmin)
-- Búsqueda
-
-Estado: React Query para server state, Zustand para UI state
-Auth: almacenar tokens en httpOnly cookies (más seguro que localStorage)
+frontend/
+  index.html
+  package.json
+  vite.config.ts
+  tsconfig.json
+  tailwind.config.ts
+  postcss.config.js
+  components.json                       # config de shadcn/ui
+  .env.development                      # VITE_API_BASE_URL=http://localhost:8000/api/v1
+  .env.production                       # VITE_API_BASE_URL=/api/v1  (mismo origen vía Nginx)
+  src/
+    main.tsx                            # bootstrap: QueryClientProvider + RouterProvider
+    App.tsx
+    routes.tsx                          # createBrowserRouter, rutas públicas/protegidas
+    lib/
+      api-client.ts                     # axios instance + interceptors + unwrap + ApiError
+      query-client.ts                   # QueryClient con defaults
+      utils.ts                          # cn() de shadcn
+    shared/
+      components/                       # ProtectedRoute, AppLayout, Sidebar, Header, ...
+      components/ui/                    # shadcn/ui generados (button, input, dialog, ...)
+      hooks/                            # useDebounce, usePagination, ...
+      types/                            # tipos API compartidos (Envelope, Meta, ApiError)
+    features/
+      auth/
+        api.ts                          # login, refresh, logout, me
+        store.ts                        # useAuthStore (Zustand): access en memoria, role, org
+        hooks.ts                        # useLogin, useLogout, useMe (TanStack mutations/queries)
+        components/LoginForm.tsx
+        pages/LoginPage.tsx
+        types.ts
 ```
 
-### 5.2 GitHub Actions — CI/CD
+#### Piezas a implementar
+
+```
+frontend/  (scaffolding via: npm create vite@latest frontend -- --template react-ts)
+frontend/src/lib/api-client.ts          ← axios + refresh interceptor (cola de 401)
+frontend/src/features/auth/store.ts      ← useAuthStore
+frontend/src/features/auth/api.ts         ← /auth/login, /refresh, /logout, /me
+frontend/src/features/auth/hooks.ts        ← useLogin, useMe (TanStack Query)
+frontend/src/features/auth/pages/LoginPage.tsx
+frontend/src/shared/components/ProtectedRoute.tsx
+frontend/src/shared/components/AppLayout.tsx   ← grid: Sidebar + Header + <Outlet/>
+frontend/src/shared/components/Sidebar.tsx      ← nav por rol (RBAC en UI: oculta lo no permitido)
+frontend/src/shared/components/Header.tsx        ← user menu, logout
+frontend/src/routes.tsx
+frontend/src/features/auth/__tests__/         ← tests de store + interceptor (Vitest)
+```
+
+Componentes shadcn/ui a generar en 5.1: `button`, `input`, `label`, `form`, `card`,
+`sonner` (toasts), `avatar`, `dropdown-menu`, `skeleton`.
+
+#### Dependencias externas (npm)
+
+```
+react ^18.3, react-dom ^18.3, typescript ^5.6, vite ^5.4
+@vitejs/plugin-react ^4.3
+tailwindcss ^3.4, postcss, autoprefixer
+react-router-dom ^6.26
+axios ^1.7
+@tanstack/react-query ^5.59
+zustand ^5.0
+react-hook-form ^7.53, zod ^3.23, @hookform/resolvers ^3.9
+clsx, tailwind-merge, class-variance-authority, lucide-react   (deps de shadcn/ui)
+# dev: vitest ^2.1, @testing-library/react ^16, @testing-library/jest-dom, jsdom, msw ^2.4
+```
+
+Backend: añadir `django-cors-headers` (~4.4) a `requirements.txt`, habilitado SOLO en
+`development.py` con `CORS_ALLOWED_ORIGINS=["http://localhost:5173"]` (puerto Vite). En prod
+NO se usa (mismo origen).
+
+#### DoD
+
+- [ ] `frontend/` scaffolding corriendo: `npm run dev` sirve en `localhost:5173`.
+- [ ] Tailwind + shadcn/ui operativos (un `<Button>` renderiza con estilos).
+- [ ] `api-client.ts`: inyecta `Authorization: Bearer`, y ante 401 refresca el token y
+      reintenta la request original una sola vez; si el refresh falla → logout + redirect.
+- [ ] Login funcional contra `/api/v1/auth/login/` (backend en dev); guarda tokens.
+- [ ] `<ProtectedRoute>` redirige a `/login` si no hay sesión; el `AppLayout` (sidebar +
+      header) se muestra autenticado.
+- [ ] Logout llama `/auth/logout/` (blacklist) y limpia el estado.
+- [ ] CORS habilitado en `development.py`; `manage.py check` limpio; suite backend sigue
+      verde tras añadir `django-cors-headers`.
+- [ ] Tests Vitest del store de auth y del interceptor de refresh (mock con MSW).
+
+#### Commits sugeridos
+
+```
+chore(frontend): scaffold React+TS+Vite with Tailwind and shadcn/ui
+chore(backend): add django-cors-headers enabled in development only
+feat(frontend): add axios client with JWT refresh interceptor
+feat(frontend): add auth store, login page and protected routing
+feat(frontend): add authenticated app layout (sidebar + header)
+test(frontend): add tests for auth store and refresh interceptor
+```
+
+---
+
+### 5.2 — Frontend: gestión documental
+
+**Objetivo.** La parte central de la app: navegar carpetas, listar y ver documentos, subir
+archivos con drag & drop y progreso, ver el estado de OCR y buscar por contenido (FTS). Es
+lo que un recruiter abre primero. Depende enteramente de 5.1.
+
+#### Decisiones cerradas
+
+1. **Upload con `react-dropzone`** + `axios` `onUploadProgress`. La validación
+   client-side (tipo MIME por extensión + tamaño ≤ 50 MB) replica
+   `ALLOWED_UPLOAD_MIME_TYPES`/`MAX_UPLOAD_SIZE` del backend vía un schema zod en
+   `features/documents/validation.ts`. El backend sigue siendo la autoridad (valida por
+   magic bytes); la validación de cliente es UX, no seguridad.
+2. **`ocr_status` se muestra con un badge** (pending=gris, processing=azul pulsante,
+   completed=verde, failed=rojo, skipped=neutro). En la **vista de detalle** se hace
+   **polling con TanStack Query `refetchInterval`** mientras el status sea
+   `pending`/`processing` (se detiene al llegar a un estado terminal). NO se implementan
+   websockets en Fase 5 (over-engineering para portafolio).
+3. **Folder browser es una vista de un solo nivel con breadcrumb**, no un árbol lateral
+   recursivo. *Razón:* el endpoint `/folders/{id}/children/` + `/folders/{id}/documents/`
+   ya da exactamente esto; un árbol completo exigiría cargar todo o lazy-load complejo.
+   Reevaluable.
+4. **Descarga vía presigned URL.** El click en "descargar" llama
+   `GET /documents/{id}/download/`, recibe `{url, expires_in}` y hace
+   `window.open(url)` — el navegador baja directo de MinIO/S3. El frontend nunca
+   streamea binario.
+5. **Búsqueda global en el Header** (input con `useDebounce` de 300 ms) que navega a
+   `/search?q=...`. Resultados paginados reutilizando el mismo `DocumentCard` que la lista.
+   Usa `GET /api/v1/search/`.
+6. **Paginación de servidor, no scroll infinito.** Componente `<Pagination>` de shadcn
+   consumiendo `meta.page`/`meta.total_pages`/`meta.next`.
+
+#### Piezas a implementar
+
+```
+frontend/src/features/folders/
+  api.ts          ← list, getById, children, documentsInFolder, create, rename, move, delete
+  hooks.ts        ← useFolders, useFolderChildren, useCreateFolder, ...
+  components/      ← FolderBreadcrumb, FolderCard, CreateFolderDialog
+  pages/FolderBrowserPage.tsx
+  types.ts
+frontend/src/features/documents/
+  api.ts          ← list, getById, upload, uploadVersion, updateMetadata, delete, download, reprocessOcr
+  hooks.ts        ← useDocuments, useDocument(polling OCR), useUploadDocument, ...
+  validation.ts   ← zod schema (tipo + tamaño) compartido
+  components/      ← DocumentCard, DocumentUploadDropzone, OcrStatusBadge,
+                     DocumentVersionList, DocumentMetadataForm
+  pages/DocumentListPage.tsx
+  pages/DocumentDetailPage.tsx
+  types.ts
+frontend/src/features/search/
+  api.ts, hooks.ts, pages/SearchPage.tsx
+frontend/src/features/dashboard/
+  pages/DashboardPage.tsx   ← documentos recientes + stats (cuenta por status, conteo OCR)
+frontend/src/shared/components/Pagination.tsx
+```
+
+Componentes shadcn/ui adicionales: `dialog`, `badge`, `table`, `tabs`, `progress`,
+`tooltip`, `select`, `breadcrumb`, `pagination`, `alert-dialog` (confirmar delete).
+
+#### Dependencias externas (npm)
+
+```
+react-dropzone ^14.2
+date-fns ^4.1           # formateo de timestamps ISO 8601
+```
+
+#### DoD
+
+- [ ] Dashboard muestra documentos recientes y conteos por status.
+- [ ] Folder browser navega carpetas con breadcrumb; crear/renombrar/borrar carpeta funciona.
+- [ ] Document list paginada con filtros por status y carpeta.
+- [ ] Upload drag & drop con barra de progreso real; rechaza en cliente tipo/tamaño inválido
+      antes de enviar; el backend confirma con 201.
+- [ ] Document detail: metadata editable, lista de versiones, subir nueva versión, descargar
+      vía presigned URL, badge de `ocr_status` con polling que para en estado terminal,
+      botón "reprocesar OCR" (Editor+).
+- [ ] Búsqueda global desde el header con debounce; página de resultados paginada.
+- [ ] La UI oculta acciones de escritura para roles `viewer`/`auditor` (RBAC en UI; el
+      backend sigue siendo la autoridad real).
+- [ ] Tests Vitest de: validación de upload (zod), `OcrStatusBadge`, hook de polling.
+
+#### Commits sugeridos
+
+```
+feat(frontend): add folder browser with breadcrumb navigation
+feat(frontend): add document list and detail pages
+feat(frontend): add drag-and-drop upload with client validation and progress
+feat(frontend): add OCR status badge with detail polling
+feat(frontend): add global search and results page
+feat(frontend): add dashboard with recent documents and stats
+test(frontend): add tests for upload validation and OCR polling
+```
+
+---
+
+### 5.3 — Frontend: workflows y auditoría
+
+**Objetivo.** Exponer en la UI el motor de workflows (templates, ejecuciones, avanzar/
+aprobar/rechazar) y la consola de auditoría filtrable. Cierra la cobertura de la API en el
+frontend. Opcionalmente, el panel de análisis IA. Depende de 5.1 y 5.2.
+
+#### Decisiones cerradas
+
+1. **El builder de templates es un formulario de pasos dinámico** (`useFieldArray` de
+   react-hook-form): añadir/quitar pasos, cada uno con `name`, `order` (auto), `required_role`
+   (select de roles), `is_final` (checkbox). Validación zod: exactamente un `is_final`,
+   orders consecutivos — mismas reglas que `create_template` del backend.
+2. **La acción de avanzar paso usa un `<AlertDialog>`** con select de acción
+   (`approved`/`rejected`/`commented`) y textarea de comentario → `POST .../advance/`. El
+   frontend NO decide si el usuario tiene el rol del paso; manda la request y muestra el 403
+   del backend como toast si no le corresponde (el backend es la autoridad).
+3. **La auditoría es una tabla server-side filtrable** (`action`, `entity_type`,
+   `entity_id`, `user`, `created_after`/`created_before`) reutilizando los query params de
+   `django-filter` ya existentes. Solo visible para `auditor`/`org_admin`/`super_admin` (la
+   ruta se oculta del sidebar y se protege; el backend devuelve 403 igualmente).
+4. **El panel de IA (opcional) dispara `POST /documents/{id}/analyze/`** y, como es async
+   (202), hace polling de `GET /documents/{id}/` hasta que aparezca `metadata.ai_analysis`,
+   mostrando summary/entities/suggested_category. Si el backend devuelve 503
+   (`AI_SERVICE_UNAVAILABLE`), la UI muestra "Análisis IA no habilitado" y oculta el botón.
+
+#### Piezas a implementar
+
+```
+frontend/src/features/workflows/
+  api.ts          ← templates CRUD, executions list, start, advance, logs
+  hooks.ts
+  components/     ← WorkflowTemplateForm (useFieldArray), WorkflowStepEditor,
+                    ExecutionStatusBadge, AdvanceStepDialog, WorkflowStepLogTimeline
+  pages/WorkflowTemplatesPage.tsx
+  pages/WorkflowTemplateDetailPage.tsx
+  pages/WorkflowExecutionsPage.tsx
+  pages/WorkflowExecutionDetailPage.tsx
+  types.ts
+frontend/src/features/audit/
+  api.ts, hooks.ts
+  components/AuditLogFilters.tsx, AuditLogTable.tsx
+  pages/AuditLogPage.tsx
+  types.ts
+frontend/src/features/documents/components/AiAnalysisPanel.tsx   (opcional)
+```
+
+Componentes shadcn/ui adicionales: `textarea`, `checkbox`, `popover`, `calendar`
+(date range para auditoría), `accordion`, `separator`.
+
+#### Dependencias externas (npm)
+
+Ninguna nueva más allá de las de 5.1/5.2 (el date picker usa `calendar` de shadcn + date-fns).
+
+#### DoD
+
+- [ ] Listar/crear/ver templates de workflow con el builder de pasos dinámico; validación
+      de "exactamente un paso final" y orders consecutivos en cliente.
+- [ ] Listar ejecuciones con filtro por estado/documento; ver detalle con timeline de logs.
+- [ ] Avanzar paso (approve/reject/comment) desde la UI; el 403 por rol incorrecto se
+      muestra como toast.
+- [ ] Iniciar workflow sobre un documento desde su detalle (Editor+).
+- [ ] Consola de auditoría con tabla filtrable por acción/entidad/usuario/rango de fechas;
+      visible solo para roles autorizados.
+- [ ] (Opcional) Panel de IA: dispara análisis, hace polling y muestra el resultado; oculto
+      si el backend responde 503.
+- [ ] Tests Vitest del `WorkflowTemplateForm` (validación de pasos) y de los filtros de
+      auditoría.
+
+#### Commits sugeridos
+
+```
+feat(frontend): add workflow templates pages with dynamic step builder
+feat(frontend): add workflow executions list, detail and advance dialog
+feat(frontend): add audit log console with server-side filters
+feat(frontend): add AI analysis panel (optional, hidden when disabled)
+test(frontend): add tests for workflow template form and audit filters
+```
+
+---
+
+### 5.4 — CI/CD con GitHub Actions
+
+**Objetivo.** Un pipeline que en cada PR garantice que el backend pasa lint+tests contra
+PostgreSQL real y que el frontend compila y pasa sus tests, de modo que `main` nunca reciba
+código roto. El deploy se separa en un workflow manual (ver 5.5).
+
+#### Decisiones cerradas
+
+1. **Dos jobs paralelos: `backend` y `frontend`.** No se bloquean entre sí; ambos deben
+   pasar para mergear (branch protection en `main` exige ambos checks).
+2. **El job backend levanta PostgreSQL 16 y Redis 7 como `services` del runner** (no
+   docker-compose). *Razón crítica:* CLAUDE.md §6 y §11 exigen tests contra PostgreSQL
+   real, NUNCA SQLite. Se usa `DJANGO_SETTINGS_MODULE=config.settings.test` apuntando a la
+   DB `test_saasvault_db` del service. `CELERY_TASK_ALWAYS_EAGER=True` evita necesitar un
+   worker en CI. MinIO NO se levanta: los tests de storage están mockeados (decisión de
+   Fase 2).
+3. **`libmagic1`, `tesseract-ocr`, `tesseract-ocr-spa`, `poppler-utils` se instalan con
+   `apt` en el runner** antes de pytest. *Razón:* `python-magic` y el OCR los requieren; sin
+   ellos la colección de tests falla en import. (Los unit tests de OCR mockean el motor,
+   pero el import de `pytesseract`/`pdf2image` necesita los binarios presentes para no
+   romper otras suites — instalar es lo más simple y robusto.)
+4. **Cobertura: `pytest --cov` con `--cov-fail-under=95`.** El pipeline FALLA si la
+   cobertura baja del umbral. Se sube el reporte a **Codecov** (gratis para repos públicos,
+   badge directo).
+5. **Triggers:** `on: pull_request` hacia `main` y `develop`, y `on: push` a `develop`. El
+   push a `main` NO dispara deploy automático (decisión global #5). El deploy es un workflow
+   aparte con `workflow_dispatch`.
+6. **Secrets de CI mínimos.** Las credenciales de la DB de test son del service del runner
+   (no secretos reales). Solo se necesita `CODECOV_TOKEN` (y para repos públicos ni eso). Se
+   usa un `.env.ci` generado en el step, no el `.env` real.
+7. **Caching:** `actions/setup-python` con `cache: pip` y `actions/setup-node` con
+   `cache: npm` para acelerar.
+
+#### Piezas a implementar
+
+```
+.github/workflows/ci.yml          ← jobs: backend (lint+test+cov), frontend (lint+typecheck+test+build)
+.github/workflows/deploy.yml       ← workflow_dispatch (ver 5.5): SSH al VPS y redeploy
+backend/pyproject.toml             ← asegurar addopts con --cov y --cov-fail-under=95 (si no están)
+frontend/package.json              ← scripts: lint (eslint), typecheck (tsc --noEmit), test (vitest run), build (tsc && vite build)
+README.md                          ← badge de CI + badge de cobertura (Codecov)
+```
+
+Esqueleto del job backend (referencia, no copiar literal):
 
 ```yaml
-# .github/workflows/ci.yml
-Pipeline:
-  1. Lint (black, isort, flake8)
-  2. Tests (pytest con cobertura)
-  3. Build Docker image
-  4. Deploy a VPS (solo en push a main)
-
-Secrets necesarios en GitHub:
-  - VPS_HOST, VPS_USER, VPS_SSH_KEY
-  - DOCKER_HUB_USER, DOCKER_HUB_TOKEN (si se usa Docker Hub)
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_DB: test_saasvault_db, POSTGRES_USER: saasvault_user, POSTGRES_PASSWORD: ci_pass }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U saasvault_user" --health-interval 10s
+          --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.13", cache: pip }
+      - run: sudo apt-get update && sudo apt-get install -y libmagic1 tesseract-ocr tesseract-ocr-spa poppler-utils
+      - run: pip install -r backend/requirements.txt
+      - run: black --check . && isort --check-only . && flake8 .
+        working-directory: backend
+      - run: pytest --cov --cov-fail-under=95 --cov-report=xml
+        working-directory: backend
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings.test
+          DB_HOST: localhost
+          # ... resto de env de DB/redis apuntando a los services
+      - uses: codecov/codecov-action@v4
 ```
 
-### 5.3 Deploy en VPS
+#### Dependencias externas
 
 ```
-Proveedor: Hetzner CX21 (~6 USD/mes) o DigitalOcean Droplet
-
-Setup en VPS:
-- Ubuntu 22.04
-- Docker + Docker Compose
-- Nginx como reverse proxy
-- SSL con Let's Encrypt (certbot)
-- docker-compose.prod.yml con todos los servicios
-
-Stack en producción:
-  nginx → gunicorn → django
-  celery worker
-  celery beat
-  postgres (o RDS externo)
-  redis
-  minio (o S3)
+GitHub Actions: actions/checkout@v4, setup-python@v5, setup-node@v4, codecov/codecov-action@v4
+npm (dev): eslint ^9, @typescript-eslint/*, eslint-plugin-react-hooks
 ```
 
-### 5.4 Observabilidad
+#### DoD
+
+- [ ] `ci.yml` corre en cada PR a `main`/`develop`; ambos jobs (backend, frontend) en verde.
+- [ ] Backend testea contra PostgreSQL 16 + Redis 7 reales como services del runner.
+- [ ] Lint backend (black/isort/flake8) y frontend (eslint + `tsc --noEmit`) como gate.
+- [ ] El pipeline falla si la cobertura baja de 95%.
+- [ ] `vite build` produce el bundle de producción sin errores de tipos.
+- [ ] Branch protection en `main` exige los dos checks verdes antes de mergear.
+- [ ] Badges de CI y cobertura visibles en el README.
+
+#### Commits sugeridos
 
 ```
-Sentry:
-- Instalar sentry-sdk en Django
-- Configurar con DSN de variable de entorno
-- Error tracking automático en producción
-
-Logging estructurado:
-- JSON logs en producción
-- python-json-logger
-- Niveles: DEBUG (dev), INFO (prod)
-
-Prometheus + Grafana (opcional avanzado):
-- django-prometheus para métricas
-- Grafana dashboard básico de requests/errores
+ci: add GitHub Actions pipeline (backend tests on real Postgres, frontend build)
+ci: enforce 95% coverage gate and upload to Codecov
+chore(frontend): add eslint, typecheck and test npm scripts
+docs: add CI and coverage badges to README
 ```
 
-### Entregable Fase 5 (proyecto completo)
-- [ ] Frontend funcional y navegable
-- [ ] CI/CD con GitHub Actions pasando en verde
-- [ ] App desplegada en VPS con HTTPS
-- [ ] Sentry configurado
-- [ ] README completo con arquitectura, screenshots, y cómo correrlo
-- [ ] Documentación de API (puede ser Swagger/OpenAPI automático via drf-spectacular)
+---
+
+### 5.5 — Deploy en VPS (producción)
+
+**Objetivo.** Poner la app accesible públicamente con HTTPS: Nginx como reverse proxy +
+servidor del estático del frontend, Gunicorn sirviendo Django, worker y beat de Celery,
+PostgreSQL/Redis y storage. Una compose de producción distinta de la de dev.
+
+#### Decisiones cerradas
+
+1. **VPS Ubuntu 22.04 (Hetzner CX22 o DigitalOcean, ~5–6 USD/mes), Docker + Compose.**
+2. **`docker-compose.prod.yml` separado** del `docker-compose.yml` de dev. Servicios:
+   `nginx`, `web` (Gunicorn+Django), `worker` (Celery), `beat` (Celery beat), `postgres`,
+   `redis`, `minio`, y un servicio one-shot `migrate`. El `web` NO corre migraciones.
+3. **Un Dockerfile multi-stage para el backend** (`backend/Dockerfile`): stage builder
+   instala deps de build, stage runtime instala los binarios apt
+   (`libmagic1 tesseract-ocr tesseract-ocr-spa poppler-utils`), copia el venv, corre como
+   usuario no-root, `CMD` = gunicorn. El mismo image lo usan `web`, `worker`, `beat` y
+   `migrate` (cambia el `command`).
+4. **El frontend se compila en su propio `frontend/Dockerfile` multi-stage** (build stage
+   Node → artefactos `dist/` copiados al contexto del servicio nginx). Un solo Nginx sirve
+   estático + proxy.
+5. **Nginx**: sirve `/` (SPA, con `try_files ... /index.html` para el router del cliente) y
+   hace `proxy_pass` de `/api/`, `/admin/`, `/static/` (Django admin) al `web:8000`.
+   Certbot/Let's Encrypt para SSL. HTTP→HTTPS redirect. Mismo origen → sin CORS en prod.
+6. **`config/settings/production.py` endurecido:** `DEBUG=False`,
+   `ALLOWED_HOSTS` desde env, `SECURE_SSL_REDIRECT=True`, `SECURE_HSTS_SECONDS`,
+   `SESSION_COOKIE_SECURE`/`CSRF_COOKIE_SECURE=True`, `SECURE_PROXY_SSL_HEADER`
+   (porque está detrás de Nginx), `CONN_MAX_AGE=60`, JWT access de 15 min (vs 60 en dev),
+   storage apuntando a S3/MinIO de prod. Todo vía `python-decouple`, NADA hardcodeado.
+7. **Migraciones seguras (decisión global #6):** el servicio `migrate` corre
+   `python manage.py migrate --noinput` y termina; `web`/`worker`/`beat` dependen de él
+   (`depends_on: migrate: condition: service_completed_successfully`). Para columnas NOT
+   NULL en tablas grandes se mantiene el patrón de 3 migraciones (CLAUDE.md §6); no aplica a
+   ninguna migración existente.
+8. **Backup de DB básico:** un servicio/cron `pg_dump` diario comprimido a un volumen (o a
+   un bucket S3 con `aws s3 cp`), con retención de 7 días. Script `scripts/backup_db.sh`
+   documentado. Restore documentado en README. (Backups gestionados/PITR = trabajo futuro.)
+9. **`collectstatic` para el admin de Django** se corre en el entrypoint del `migrate`
+   (one-shot), sirviendo `/static/` desde Nginx.
+
+#### Piezas a implementar
+
+```
+backend/Dockerfile                     ← multi-stage; runtime con tesseract/poppler/libmagic; gunicorn
+backend/entrypoint.sh                   ← opcional: collectstatic + arranque (sin migrate en web)
+frontend/Dockerfile                     ← multi-stage node build → dist/
+docker-compose.prod.yml                 ← nginx, web, worker, beat, postgres, redis, minio, migrate
+nginx/nginx.conf                         ← (dir ya existe) SPA + proxy /api /admin /static; SSL; HTTP→HTTPS
+backend/.env.production.example          ← plantilla de env de prod (sin secretos reales)
+scripts/backup_db.sh                     ← pg_dump diario comprimido + retención
+scripts/deploy.sh                        ← pull, build, migrate one-shot, up -d, prune (idempotente)
+.github/workflows/deploy.yml             ← workflow_dispatch: SSH al VPS → scripts/deploy.sh
+README.md                                 ← sección "Deploy" (provisión VPS, DNS, certbot, env)
+```
+
+Variables de entorno de producción (qué cambia respecto a dev):
+
+```
+DJANGO_SETTINGS_MODULE=config.settings.production
+DJANGO_DEBUG=False
+DJANGO_SECRET_KEY=<secreto fuerte real>
+ALLOWED_HOSTS=saasvault.tudominio.com
+DB_HOST=postgres            # nombre del servicio en la compose
+DB_PASSWORD=<fuerte>
+REDIS_URL=redis://redis:6379/0
+# Storage: S3 real o MinIO de prod (NUNCA minioadmin/minioadmin)
+AWS_ACCESS_KEY_ID=<real>  AWS_SECRET_ACCESS_KEY=<real>
+AWS_STORAGE_BUCKET_NAME=saasvault-prod  AWS_S3_ENDPOINT_URL=<S3 o MinIO prod>
+JWT_ACCESS_LIFETIME_MIN=15
+SENTRY_DSN=<de 5.6>
+ORPHAN_BLOB_GRACE_HOURS=24
+# Email (de 5.7): EMAIL_BACKEND, SENDGRID/SMTP creds
+```
+
+#### Dependencias externas
+
+```
+pip: gunicorn (~23.0)
+sistema (en el VPS): docker, docker compose, certbot (vía contenedor o host)
+infra: dominio + registro DNS A → IP del VPS; cuenta S3 o MinIO de prod
+```
+
+#### DoD
+
+- [ ] `backend/Dockerfile` construye una imagen que corre Gunicorn con tesseract/poppler/
+      libmagic presentes; corre como usuario no-root.
+- [ ] `frontend/Dockerfile` produce el `dist/` de producción.
+- [ ] `docker-compose.prod.yml` levanta nginx+web+worker+beat+postgres+redis+minio; el
+      servicio `migrate` corre una sola vez antes que `web`/`worker`/`beat`.
+- [ ] Nginx sirve la SPA (con fallback a `index.html`) y hace proxy de `/api/`, `/admin/`,
+      `/static/`; HTTPS con cert de Let's Encrypt; HTTP redirige a HTTPS.
+- [ ] `production.py` con `DEBUG=False`, `SECURE_PROXY_SSL_HEADER`, cookies seguras, HSTS,
+      `ALLOWED_HOSTS` y storage por env; ningún secreto hardcodeado.
+- [ ] La app responde en `https://<dominio>/` (frontend) y `https://<dominio>/api/v1/`.
+- [ ] `scripts/backup_db.sh` produce un dump comprimido; restore documentado.
+- [ ] `deploy.yml` (`workflow_dispatch`) hace SSH y ejecuta `deploy.sh` de forma idempotente.
+
+#### Commits sugeridos
+
+```
+chore(backend): add gunicorn and multi-stage Dockerfile with OCR system deps
+chore(frontend): add multi-stage Dockerfile producing production bundle
+feat(deploy): add docker-compose.prod.yml with web/worker/beat/migrate services
+feat(deploy): add Nginx reverse proxy config with SPA fallback and TLS
+feat(deploy): harden production settings (HTTPS, secure cookies, proxy header)
+feat(deploy): add db backup and idempotent deploy scripts
+ci: add manual deploy workflow (workflow_dispatch over SSH)
+docs: document VPS provisioning, DNS, certbot and production env
+```
+
+---
+
+### 5.6 — Observabilidad
+
+**Objetivo.** Saber qué pasa en producción: errores capturados con contexto (Sentry, back y
+front), logs estructurados en JSON, y un health check que verifique DB, Redis y storage para
+monitoreo externo / load balancer.
+
+#### Decisiones cerradas
+
+1. **Sentry en backend vía `sentry-sdk[django]`** con `DjangoIntegration` +
+   `CeleryIntegration`. DSN por env (`SENTRY_DSN`, vacío = desactivado, igual que la feature
+   IA). `traces_sample_rate` bajo (0.1) para performance sin coste. `send_default_pii=False`
+   (no filtrar datos de tenant a Sentry). Se inicializa SOLO en `production.py`.
+2. **Sentry en frontend vía `@sentry/react`** con DSN por env (`VITE_SENTRY_DSN`). Captura
+   errores de render (ErrorBoundary) y de las mutaciones. Solo activo en el build de prod.
+3. **`scrubbing` de datos sensibles:** se configura `before_send` para no enviar el
+   `Authorization` header ni el body de `/auth/`. *Razón:* CLAUDE.md §10/§16 — nunca exponer
+   credenciales; Sentry es un tercero.
+4. **Logging estructurado JSON en producción** con `python-json-logger`. En dev sigue el
+   formato legible actual. Cada log lleva, cuando hay request, `organization_id`, `user_id`,
+   `request_id` (un filtro de logging que lee del contexto del middleware de tenant). NUNCA
+   `print()` (CLAUDE.md §16). El `JSONFormatter` se añade al `LOGGING` de `production.py`;
+   `base.py` ya tiene logging configurado.
+5. **Health check en `apps/core`** (no es dominio, es infraestructura): un service ligero
+   que hace `SELECT 1` (DB), `PING` (Redis) y `head_bucket` (storage), con timeout corto.
+   Endpoint `GET /api/v1/health/` **público (AllowAny)** y **NO auditado** (lo llama el load
+   balancer/uptime monitor sin token). Devuelve `200` si todo ok, `503` si algún componente
+   falla, con `{data: {database, redis, storage}}` por componente. NO usa el envelope de
+   error estándar para el 503 (es un health check, no un error de negocio) — devuelve el
+   detalle por componente. Documentar esta excepción al envelope.
+6. **El health check NO cuenta para el aislamiento de tenant** porque no toca datos de
+   dominio (solo conectividad). Excepción justificada a "todo recibe organization", como
+   `cleanup_orphan_blobs`.
+
+#### Piezas a implementar
+
+```
+backend/requirements.txt                 ← sentry-sdk[django], python-json-logger
+config/settings/production.py             ← sentry_sdk.init(...) + LOGGING con JSONFormatter
+config/settings/base.py                    ← (si hace falta) filtro de logging request-context
+apps/core/services/health_service.py        ← NUEVO: check_health() -> dict (db, redis, storage)
+apps/core/api/health_view.py                  ← NUEVO: HealthCheckView (AllowAny, GET)
+config/api_urls.py                              ← path("health/", HealthCheckView.as_view())
+apps/core/logging.py                             ← JSONFormatter + RequestContextFilter
+apps/core/tests/test_health.py                    ← NUEVO (~6 tests)
+frontend/src/lib/sentry.ts                          ← init @sentry/react (prod only)
+frontend/src/shared/components/ErrorBoundary.tsx
+```
+
+Contrato del health service:
+
+```python
+# apps/core/services/health_service.py
+def check_health() -> dict:
+    """System-wide connectivity check (db, redis, storage). Tenant-agnostic:
+    no request, no organization (it runs before/without auth). Returns a dict
+    {"database": bool, "redis": bool, "storage": bool}. Never raises."""
+```
+
+#### Dependencias externas
+
+```
+pip: sentry-sdk[django] (~2.14), python-json-logger (~2.0)
+npm: @sentry/react ^8.30
+infra: cuenta Sentry (free tier) → 2 DSN (backend, frontend)
+```
+
+#### DoD
+
+- [ ] `GET /api/v1/health/` devuelve 200 con `{database, redis, storage}` cuando todo está
+      sano; 503 si algún componente falla; público y no auditado.
+- [ ] Sentry backend captura una excepción no manejada en prod con contexto (sin PII, sin
+      Authorization header); desactivado si `SENTRY_DSN` vacío.
+- [ ] Sentry frontend captura un error de render vía ErrorBoundary; desactivado sin DSN.
+- [ ] Logs en JSON en producción con `organization_id`/`user_id`/`request_id` cuando aplica;
+      formato legible en dev.
+- [ ] Tests del health service (db/redis/storage ok → 200; cada componente caído → 503) y de
+      que el endpoint no requiere auth ni genera audit log.
+
+#### Commits sugeridos
+
+```
+feat(core): add health check endpoint (db, redis, storage)
+feat(observability): add structured JSON logging with request context in production
+chore(observability): integrate Sentry in Django and Celery (DSN-gated)
+feat(frontend): add Sentry and error boundary (production only)
+test(core): add tests for health check service and endpoint
+```
+
+---
+
+### 5.7 — Notificaciones por email en workflows
+
+**Objetivo.** El primer side-effect real del motor de workflows: cuando una ejecución avanza
+a un nuevo paso, notificar por email al/los usuario(s) que deben actuar (los del
+`required_role` del nuevo paso). Cierra el placeholder de Fase 3.2 (decisión #5: "config/
+actions JSONB reservado para notificaciones de Fase 4/5") y de Fase 4 (notificaciones
+diferidas a Fase 5).
+
+#### Decisiones cerradas
+
+1. **`apps/notifications` se modela como dominio** (existe como skeleton). Modelo
+   `Notification(BaseModel)` con FK obligatoria a `Organization`, `recipient` (FK User),
+   `channel` (`email` por ahora; choices extensible), `subject`, `body`, `status`
+   (`pending`/`sent`/`failed`), `sent_at`, `metadata` (JSONB: p.ej.
+   `{"execution_id", "step_id"}`). *Razón:* tener registro auditable de qué se notificó a
+   quién; no es solo "mandar un email y olvidar".
+2. **El envío va en una tarea Celery** (`apps/notifications/tasks/notification_tasks.py`),
+   disparada vía `transaction.on_commit` desde `workflow_service.advance_step`/
+   `start_workflow` — NUNCA bloquea el request (CLAUDE.md §6, §12). La tarea es fina y
+   delega en `notification_service`.
+3. **El destinatario del nuevo paso** se resuelve por rol: los usuarios vivos de la
+   organización cuyo `role == nuevo_step.required_role`. Se notifica al `required_role`
+   exacto del paso (NO se spamea a org_admin/super_admin por su override). Un selector
+   nuevo en `apps/notifications` resuelve los destinatarios filtrando por `organization`
+   (tenant-safe).
+4. **`workflow_service` NO importa el envío de email directamente**; encola el evento
+   llamando a `notification_service.notify_step_assigned(...)` que crea el `Notification`
+   (status `pending`) y programa la task. *Razón:* desacoplar el motor de workflow del
+   detalle de transporte (email hoy, in-app/push mañana). El acoplamiento es vía service,
+   no vía import del backend de email.
+5. **`EMAIL_BACKEND` por entorno:** dev → `console.EmailBackend` (imprime el email en la
+   terminal, cero credenciales); test → `locmem` (Django lo testea en `mail.outbox`);
+   producción → SMTP de SendGrid (`smtp.sendgrid.net`, API key por env). Todo por
+   `python-decouple`; NADA hardcodeado.
+6. **Template HTML básico** en `apps/notifications/templates/notifications/` renderizado
+   con `django.template` (`render_to_string`), con versión texto plano de fallback
+   (`EmailMultiAlternatives`). Branding mínimo, link al documento/ejecución.
+7. **Idempotencia y reintentos:** la task usa `autoretry_for` con el error transitorio de
+   SMTP, `max_retries` desde settings. Marcar `Notification.status=sent` solo tras envío
+   exitoso; si falla definitivamente → `failed` (observable). No reenviar una notificación
+   ya `sent` (guard en el service).
+8. **NO se notifica en reject/cancel/complete en Fase 5** (solo "te asignaron un paso").
+   Notificar al iniciador en estados terminales = mejora incremental futura, para no
+   inflar el alcance.
+
+#### Piezas a implementar
+
+```
+config/settings/base.py / production.py     ← EMAIL_BACKEND + SMTP/SendGrid por entorno; DEFAULT_FROM_EMAIL
+config/settings/test.py                       ← EMAIL_BACKEND = locmem
+backend/.env.example / .env.production.example ← vars de email (SENDGRID_API_KEY, EMAIL_HOST, ...)
+apps/notifications/apps.py + registro en INSTALLED_APPS
+apps/notifications/models/notification.py      ← Notification(BaseModel) + índices (org, recipient, status)
+apps/notifications/services/notification_service.py  ← notify_step_assigned(), _send(notification)
+apps/notifications/selectors/notification_selector.py ← get_recipients_for_role(organization, role)
+apps/notifications/tasks/notification_tasks.py        ← send_notification (fina → service)
+apps/notifications/templates/notifications/step_assigned.html (+ .txt)
+apps/workflows/services/workflow_service.py     ← on_commit hooks en start_workflow / advance_step
+apps/notifications/tests/test_notification_service.py  ← (~8)
+apps/notifications/tests/test_notification_tasks.py     ← (~2)
+apps/workflows/tests/test_workflow_service.py            ← +tests: avanzar paso encola notificación
+```
+
+Índices de `Notification`:
+
+```
+idx_notifications_org_recipient   (organization, recipient)
+idx_notifications_org_status      (organization, status)
+```
+
+#### Dependencias externas
+
+```
+pip: ninguna nueva obligatoria (Django email + smtplib bastan; SendGrid se usa vía SMTP).
+     Opcional: sendgrid (~6.11) si se prefiere la API HTTP sobre SMTP — NO requerido.
+infra: cuenta SendGrid (free 100 emails/día) + dominio verificado (SPF/DKIM) para que no
+       caiga en spam. En dev/CI no se necesita: console/locmem backend.
+```
+
+#### DoD
+
+- [ ] Modelo `Notification` (BaseModel, FK org obligatoria, índices); migración revisada a
+      mano.
+- [ ] `notification_service.notify_step_assigned` crea el `Notification` y programa la task
+      vía `on_commit`; `_send` usa `EmailMultiAlternatives` (HTML + texto).
+- [ ] Selector tenant-safe que resuelve destinatarios por `required_role` dentro de la org.
+- [ ] `workflow_service.advance_step`/`start_workflow` encolan la notificación al entrar a un
+      nuevo paso, vía `transaction.on_commit` (verificado en test con `transaction=True`).
+- [ ] `EMAIL_BACKEND` por entorno: console (dev), locmem (test), SMTP/SendGrid (prod).
+- [ ] La task reintenta ante error transitorio de SMTP y marca `failed` ante fallo
+      permanente; no reenvía una notificación `sent`.
+- [ ] Tests: destinatario correcto por rol, tenant isolation (no se notifica a usuarios de
+      otra org), `mail.outbox` recibe el email en test, on_commit dispara la task, idempotencia.
+- [ ] drf-spectacular sigue en 0 errors / 0 warnings (no hay endpoints nuevos, pero verificar).
+
+#### Commits sugeridos
+
+```
+chore(notifications): register app and configure EMAIL_BACKEND per environment
+feat(notifications): add Notification model with tenant FK and indexes
+feat(notifications): add notification_service and recipient selector
+feat(notifications): add HTML email template and send task with retries
+feat(workflows): notify next-step reviewers on workflow advance (on_commit)
+test(notifications): add tests for service, recipients, tenant isolation and email
+test(workflows): assert step advance enqueues a notification
+```
+
+---
+
+### Orden de implementación recomendado
+
+```
+5.1 (frontend setup+auth)  ─┬─▶ 5.2 (frontend docs)  ─┬─▶ 5.3 (frontend wf+audit)
+                            │                          │
+5.7 (notificaciones email) ─┘  (backend, independiente del frontend; puede ir en paralelo)
+                                                       │
+5.4 (CI/CD) ◀──────────────────────────────────────────  (necesita que exista frontend/ para el job de build)
+   │
+   └─▶ 5.6 (observabilidad: health + logs + Sentry)  ─▶ 5.5 (deploy VPS)
+```
+
+Justificación del orden:
+- **5.1 es el cimiento del frontend** — 5.2 y 5.3 no existen sin él.
+- **5.7 (notificaciones) es backend puro e independiente**; conviene hacerlo temprano o en
+  paralelo al frontend para no acoplar calendarios. Cierra deuda de Fase 3/4.
+- **5.4 (CI) necesita que `frontend/` exista** (al menos el scaffold de 5.1) para el job de
+  build; idealmente se monta apenas terminado 5.1 para proteger todo lo demás.
+- **5.6 antes que 5.5**: el health check y los settings de logging/Sentry son insumo del
+  deploy (Nginx hace health check, prod necesita Sentry y JSON logs). Desplegar sin
+  observabilidad es desplegar a ciegas.
+- **5.5 (deploy) es el último** porque consume todo lo anterior: imágenes con el frontend
+  buildeado, settings de prod endurecidos, health check para el proxy, email SMTP real.
+
+### Riesgos principales (top 3 por impacto)
+
+1. **Refresh de JWT con requests concurrentes (5.1).** Si N requests reciben 401 a la vez,
+   sin una cola se disparan N refresh simultáneos → el `refresh` rotativo se invalida y se
+   desloguea al usuario. **Mitigación:** el interceptor mantiene una sola promesa de refresh
+   en vuelo y encola las requests fallidas hasta que resuelva; test explícito de este caso.
+2. **Deploy/migraciones concurrentes corrompen el arranque (5.5).** Si `web`, `worker` y
+   `beat` arrancan a la vez y todos corren `migrate`, hay race conditions y locks.
+   **Mitigación:** servicio `migrate` one-shot con `depends_on ... service_completed_successfully`
+   (decisión global #6); `web/worker/beat` jamás migran.
+3. **Emails de notificación marcados como spam o credenciales filtradas (5.7).** SendGrid sin
+   SPF/DKIM cae en spam; una API key en el repo es un incidente de seguridad.
+   **Mitigación:** dominio verificado en SendGrid; key SOLO por env (`python-decouple`,
+   CLAUDE.md §10); `before_send` de Sentry y scrubbing de logs para no filtrar el contenido
+   del email ni la key; console/locmem backend en dev/CI.
+
+### Lo que explícitamente queda FUERA de Fase 5 (Fase 6+)
+
+- **Tokens en cookies httpOnly** (Fase 5 usa memoria+localStorage; migración consciente).
+- **Notificaciones in-app / websockets / push**; y notificar en reject/cancel/complete
+  (Fase 5 solo "paso asignado" por email).
+- **Thumbnails / previews de documentos** (diferido desde Fase 4).
+- **Extracción de texto de Office (docx/xlsx)** con `python-docx`/`openpyxl`.
+- **`django-celery-beat`** (schedules editables desde admin) y **Flower** (monitoreo worker).
+- **Prometheus + Grafana / métricas** (Sentry cubre errores+performance básica en Fase 5).
+- **Staging environment y deploy GitOps automático a prod** (Fase 5 hace deploy manual
+  `workflow_dispatch`).
+- **`apps/billing`** (skeleton dormido).
+- **Backups gestionados / PITR** (Fase 5 hace `pg_dump` diario básico).
+- **i18n del frontend, dark mode, tests E2E (Playwright/Cypress)** (Fase 5 cubre unit/
+  component con Vitest).
 
 ---
 

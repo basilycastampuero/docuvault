@@ -695,7 +695,7 @@ fix/{name}    ← Corrección de bugs
 
 ## 17. Estado actual del proyecto
 
-**Fase actual:** Fase 4 COMPLETA. Fase 5 (Frontend + Deploy + Observabilidad) es el siguiente gran hito.
+**Fase actual:** Fase 4 COMPLETA. Fase 5 (Frontend + CI/CD + Deploy + Observabilidad) planificada — ver `docs/phase-plan.md` §5 para el plan detallado con 7 sub-fases.
 
 **Completado:**
 - [x] **Fase 0** — Setup completo: WSL2, Docker Compose (PG16 + Redis7 + MinIO),
@@ -758,7 +758,7 @@ fix/{name}    ← Corrección de bugs
 - [x] drf-spectacular configurado y operativo (0 errors / 0 warnings)
 - [x] Documentación API (Swagger UI en `/api/docs/`, Redoc en `/api/redoc/`)
 
-**Métricas:** 442 tests pasando, cobertura 99% (Fase 4 completa, 2026-06-03).
+**Métricas:** 445 tests pasando, cobertura 99% (Fase 4 completa, 2026-06-04).
 Nota: los tests requieren PostgreSQL real corriendo (`docker compose up -d`); si falla
 con `connection refused` en `localhost:5432`, la infra está apagada — no es un fallo
 de código.
@@ -775,8 +775,8 @@ de código.
 3. `Document.status` acepta 5 valores pero solo `draft ↔ under_review` se permiten
    manualmente. `approved`/`rejected` se habilitan vía `WorkflowExecution` (Fase 3.2,
    ya implementado).
-4. Tarea `process_ocr` existe como stub vacío; cuerpo real en Fase 4.2.
-5. El blob en MinIO NO se borra al soft-delete un documento. Cleanup en Fase 4.
+4. Tarea `process_ocr` implementada en Fase 4.2 con cuerpo real (`ocr_service.process()`). Ya no es un stub.
+5. El blob en MinIO NO se borra al soft-delete un documento. Cleanup implementado en Fase 4.3 (`cleanup_orphan_blobs`). Deuda cerrada.
 
 **Decisiones de diseño cerradas de Fase 3 (ya implementadas, no re-discutir):**
 6. API de auditoría es solo-lectura; leer audit logs NO genera un audit log.
@@ -791,7 +791,7 @@ de código.
    `.exists()` del service queda como fast-path. El rol requerido por paso se valida en
    el service; ORG_ADMIN/SUPER_ADMIN pueden actuar sobre cualquier paso (override).
 10. `config`/`actions` (JSONB en template/step) se persisten pero NO se interpretan
-    hasta Fase 4 (notificaciones, side-effects automáticos).
+    (notificaciones, side-effects automáticos diferidos a Fase 5).
 11. **FTS usa `config="simple"`** (sin stemming) — deliberado para corpus multi-tenant
     ES/EN. El `search_vector` se reconstruye vía signal `post_save` SOLO cuando cambia
     un campo de texto (name/description/tags/ocr_content). `bulk_create` saltaría el
@@ -850,7 +850,7 @@ transitorio (timeout)→retry, permanente (NoSuchKey/corrupto)→failed; endpoin
   `ORPHAN_BLOB_GRACE_HOURS` por env. 9 tests nuevos. 422 tests, 99%.
 - [x] **Fase 4.4 (análisis IA — opcional) COMPLETA (2026-06-03):** `ai_service.analyze()` con Claude Haiku + prompt caching; feature-flag (`ANTHROPIC_API_KEY` vacía → 503); `POST /documents/{id}/analyze/` (Editor+, 202 async); resultado en `metadata["ai_analysis"]`; sin nueva migración (JSONB existente). 442 tests, 99%.
 
-**Próximo paso:** Fase 5 — Frontend React + TypeScript + Vite + Tailwind + shadcn/ui, CI/CD (GitHub Actions), deploy VPS, observabilidad (Sentry), notificaciones email en workflows. Ver `docs/phase-plan.md` §5 para el plan.
+**Próximo paso:** Fase 5 — comenzar por **5.1 Frontend setup+auth** (React+TS+Vite+Tailwind+shadcn/ui) y **5.6 health check** (puede hacerse en paralelo como primera pieza backend de Fase 5). Ver `docs/phase-plan.md` §5 para el plan completo.
 
 Ver `docs/phase-plan.md` para el plan completo de desarrollo.
 

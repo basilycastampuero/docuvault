@@ -11,7 +11,7 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Fase 4 COMPLETA** (2026-06-03). 442 tests, 99% cobertura.
+> Última actualización: **Fase 4 COMPLETA** (2026-06-04). 445 tests, 99% cobertura.
 > Próximo hito: Fase 5 (Frontend React, CI/CD, deploy VPS, Sentry, notificaciones).
 
 ---
@@ -814,7 +814,7 @@ git commit -m "feat(scope): descripción en imperativo, sin punto final"
 > capa de auditoría + workflows + búsqueda (Fase 3) y el procesamiento asíncrono con OCR
 > (Fase 4). Escrito en lenguaje llano, con las complicaciones tal como pasaron.
 
-## Mapa rápido de dónde estamos (2026-06-02)
+## Mapa rápido de dónde estamos (2026-06-04)
 
 | Fase | Qué es | Estado |
 |------|--------|--------|
@@ -826,10 +826,10 @@ git commit -m "feat(scope): descripción en imperativo, sin punto final"
 | 4.0 | Pre-flight: dependencias OCR, descarga de blobs, settings de Celery/OCR | ✅ |
 | 4.1 | Endurecimiento de Celery: reintentos inteligentes e idempotencia | ✅ |
 | 4.2 | Pipeline OCR real (PDF + imágenes → texto buscable) | ✅ |
-| 4.3 | Limpieza periódica de archivos huérfanos en MinIO | ⏭️ Siguiente |
-| 4.4 | Análisis con IA (Claude API) — opcional | ⏳ |
+| 4.3 | Limpieza periódica de archivos huérfanos en MinIO | ✅ |
+| 4.4 | Análisis con IA (Claude API) — opcional | ✅ |
 
-**413 tests en verde, 99% de cobertura.** Los tests corren contra PostgreSQL real (no
+**445 tests en verde, 99% de cobertura.** Los tests corren contra PostgreSQL real (no
 SQLite en memoria); si fallan con "connection refused" es que falta `docker compose up -d`,
 no es un bug del código.
 
@@ -1106,6 +1106,28 @@ la lógica, una verificación puntual de que la integración con la herramienta 
 
 ---
 
+## 2026-06-04 — Plan de Fase 5 redactado (Frontend + CI/CD + Deploy + Observabilidad)
+
+Arquitectura y plan de implementación completo de Fase 5 documentado en `docs/phase-plan.md`.
+
+**Sub-fases planificadas:**
+- **5.1** Frontend setup + auth: React+TS+Vite, Tailwind, shadcn/ui, axios+interceptors, TanStack Query v5,
+  Zustand, react-router data router. Estructura feature-based en `frontend/src/features/`.
+- **5.2** Gestión documental: upload drag&drop con progreso, OCR badge polling, folder browser, FTS.
+- **5.3** Workflows + auditoría: builder de pasos dinámico, AdvanceStepDialog, consola de auditoría.
+- **5.4** CI/CD GitHub Actions: lint+test+build en paralelo, PostgreSQL 16 + Redis 7 reales en runner,
+  coverage gate 95%, Codecov badge en README.
+- **5.5** Deploy VPS: Dockerfile multi-stage con binarios OCR, docker-compose.prod.yml, Nginx+TLS,
+  backup pg_dump, vars de entorno de producción endurecidas.
+- **5.6** Observabilidad: Sentry back+front (DSN-gated), JSON logs, health check `/api/v1/health/`.
+- **5.7** Notificaciones email: `apps/notifications` (nueva app de dominio), envío vía Celery
+  `on_commit` desde `workflow_service`, `EMAIL_BACKEND` por entorno.
+
+**Estimación:** 6–8 semanas. ~70–90 tests backend nuevos + ~40–60 tests UI (Vitest).
+**Orden de implementación:** 5.6 (health) → 5.1 → 5.2 → 5.4 → 5.7 → 5.3 → 5.5.
+
+---
+
 ## 2026-06-03 — Fase 4 COMPLETA: Celery + OCR + Housekeeping + IA opcional
 
 Cerrada la Fase 4 completa con la entrega de 4.4 (análisis IA con Claude API).
@@ -1117,7 +1139,7 @@ Cerrada la Fase 4 completa con la entrega de 4.4 (análisis IA con Claude API).
 - **4.3 Housekeeping:** `cleanup_orphan_blobs` Beat diaria, cierra deuda de Fase 2 (#5).
 - **4.4 IA opcional:** `ai_service.analyze()` con Haiku + prompt caching, feature-flag por `ANTHROPIC_API_KEY`.
 
-**Métricas finales Fase 4:** 442 tests, 99% cobertura, 0 warnings en drf-spectacular.
+**Métricas finales Fase 4:** 445 tests, 99% cobertura, 0 warnings en drf-spectacular.
 
 **Decisión confirmada:** la IA queda implementada pero inactiva hasta que el usuario añada
 `ANTHROPIC_API_KEY` al `.env`. Sin key → 503. El código está listo para activar sin cambios.
