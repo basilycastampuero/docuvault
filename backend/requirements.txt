@@ -21,6 +21,7 @@ click==8.3.3
 coverage==7.13.5
 distlib==0.4.0
 django-cors-headers==4.4.0
+django-extensions==4.1
 django-filter==24.3
 django-redis==5.4.0
 django-storages==1.14.6
@@ -44,6 +45,7 @@ mypy_extensions==1.1.0
 nodeenv==1.10.0
 packaging==26.2
 pathspec==1.1.1
+pydot==4.0.1
 pdf2image==1.17.0
 pillow==11.3.0
 platformdirs==4.9.6
