@@ -184,10 +184,11 @@ mínima desde el primer día.
    `audit_service.log()`. Endpoints, filtros y permisos de lectura quedan para Fase 3.1.
    *Razón:* CLAUDE.md §9 obliga a registrar todo evento crítico desde los services. No
    se puede dejar el hook vacío sin violar la regla.
-2. **Tests de StorageService → mocked primero, MinIO real después.**
-   Iniciar con tests unitarios mockeando `boto3.client` (rápidos, sin dependencia
-   externa). Cuando el código esté estable y haya CI configurada, añadir un set
-   paralelo de tests de integración contra el bucket `saasvault-test`.
+2. **Tests de StorageService → mocked primero, MinIO real después. Deuda cerrada (2026-06-09).**
+   La base son tests unitarios mockeando `boto3.client` (rápidos, sin dependencia
+   externa). Los tests de integración reales contra MinIO se implementaron en Fase 5:
+   `test_storage_integration.py` (20 tests) + `test_cleanup_integration.py` (7 tests),
+   marker `@pytest.mark.integration`, requieren Docker con MinIO levantado.
 3. **Status approval queda fuera de Fase 2.**
    `Document.status` admite los 5 valores del enum, pero los services solo permiten
    transiciones manuales **draft ↔ under_review** en Fase 2. Las transiciones a
@@ -373,9 +374,10 @@ Tests:
         - delete_file llama delete_object
         - ensure_bucket: head_bucket 404 → crea
         - ensure_bucket: head_bucket 200 → no crea
-    storage_service integración real (Fase 2 tarde / Fase 4):
+    storage_service integración real (✅ implementado en Fase 5 — 2026-06-09):
         - fixture session-scoped que crea bucket "saasvault-test"
         - subir/leer/borrar de verdad
+        - ver test_storage_integration.py y test_cleanup_integration.py
 
 Commit: feat(documents): add file validator and MinIO storage service
         test(documents): add tests for validator and mocked storage service
@@ -521,7 +523,7 @@ Commit: feat(documents): add REST endpoints for folders and documents
 |---------------------|-------|-------|
 | Modelos             | ~15   | constraints, soft delete |
 | FileValidator       | ~8    | MIME real, size, checksum |
-| StorageService      | ~6    | **mocked en Fase 2**, real después |
+| StorageService      | ~6 mock + 27 integración | **mock en Fase 2**, integración real cerrada 2026-06-09 (`@pytest.mark.integration`) |
 | FolderService       | ~12   | hierarchy, cycle, cascade, tenant |
 | FolderSelector      | ~6    | tenant isolation, N+1 |
 | DocumentService     | ~18   | atomicidad, on_commit, status lock |

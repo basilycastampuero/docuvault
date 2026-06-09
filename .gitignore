@@ -57,3 +57,8 @@ Thumbs.db
 
 # pyenv
 .python-version
+
+# Celery
+celerybeat-schedule
+celerybeat-schedule-shm
+celerybeat-schedule-wal

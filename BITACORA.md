@@ -11,7 +11,7 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Fase 5.6 COMPLETA** (2026-06-04). 501 tests, 99% cobertura.
+> Última actualización: **Tests integración MinIO cerrados** (2026-06-09). 528 tests, 99% cobertura.
 > Próximo hito: Fase 5.1 (scaffold frontend React+TS+Vite, login con JWT).
 
 ---
@@ -1263,6 +1263,35 @@ costo en llamadas repetidas. Nueva excepción `AIServiceUnavailable` (503) en
 `apps/core/exceptions.py`.
 
 Ver `docs/phase-plan.md` §4.3 y §4.4 para el plan completo con contratos, tests y DoD.
+
+---
+
+## 2026-06-09 — Deuda técnica cerrada: tests de integración reales con MinIO
+
+Cerrada la deuda de tests de integración con MinIO que había quedado pendiente desde
+la Fase 2. La decisión original (documentada en `docs/phase-plan.md` §2.3 y en
+CLAUDE.md decisión #2) era: "mocked primero, integración real después". El "después"
+nunca llegó en Fases 3 o 4.
+
+**Archivos creados:**
+- `backend/apps/documents/tests/test_storage_integration.py` — 20 tests reales contra MinIO:
+  - `TestEnsureBucket` (2): creación idempotente de bucket.
+  - `TestUploadDownload` (4): upload + download round-trip, incluyendo binarios.
+  - `TestDeleteFile` (2): borrado y verificación de ausencia.
+  - `TestPresignedUrl` (3): generación y acceso HTTP a URL prefirmada.
+  - `TestListObjects` (3): paginación y filtrado por prefijo.
+  - `TestBuildStoragePath` (6, unitarios): formato de path `{org_id}/{YYYY}/{MM}/{doc_id}/{filename}`.
+- `backend/apps/documents/tests/test_cleanup_integration.py` — 7 tests end-to-end de
+  `cleanup_service.delete_orphan_blobs()` con PostgreSQL + MinIO reales: detecta huérfanos,
+  respeta período de gracia, no borra paths de docs vivos, maneja bucket vacío.
+
+**Configuración:**
+- `backend/pyproject.toml` — añadido marker `integration` en `[tool.pytest.ini_options].markers`.
+  Permite ejecutar solo tests de integración con `-m integration` o excluirlos con `-m "not integration"`.
+
+**Métricas:** 501 → 528 tests (+27). Los 27 nuevos son `@pytest.mark.integration` y
+requieren `docker compose up -d` con MinIO. La suite normal (sin flag) sigue siendo 501.
+Flake8 limpio, cobertura 99% mantenida.
 
 ---
 

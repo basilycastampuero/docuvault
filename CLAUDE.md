@@ -758,7 +758,7 @@ fix/{name}    ← Corrección de bugs
 - [x] drf-spectacular configurado y operativo (0 errors / 0 warnings)
 - [x] Documentación API (Swagger UI en `/api/docs/`, Redoc en `/api/redoc/`)
 
-**Métricas:** 501 tests pasando, cobertura 99% (Fase 5.6 completa, 2026-06-04).
+**Métricas:** 528 tests pasando, cobertura 99% (501 suite normal + 27 integración con MinIO, 2026-06-09).
 Nota: los tests requieren PostgreSQL real corriendo (`docker compose up -d`); si falla
 con `connection refused` en `localhost:5432`, la infra está apagada — no es un fallo
 de código.
@@ -770,8 +770,10 @@ de código.
 **Decisiones de diseño cerradas de Fase 2 (ya implementadas, no re-discutir):**
 1. `AuditLog` usa `BigAutoField` (no UUID) y NO hereda `BaseModel` — inmutable,
    append-only, consultado cronológicamente.
-2. Tests de `StorageService` son mockeados (boto3 via monkeypatch). Integración
-   real con MinIO se añade en Fase 4.
+2. Tests de `StorageService` mockeados (boto3 via monkeypatch) son la base del suite
+   normal. Tests de integración reales contra MinIO implementados en Fase 5 (deuda
+   cerrada 2026-06-09): `test_storage_integration.py` (20 tests) y
+   `test_cleanup_integration.py` (7 tests), marker `@pytest.mark.integration`.
 3. `Document.status` acepta 5 valores pero solo `draft ↔ under_review` se permiten
    manualmente. `approved`/`rejected` se habilitan vía `WorkflowExecution` (Fase 3.2,
    ya implementado).
