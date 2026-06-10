@@ -21,3 +21,6 @@ LOGGING["root"]["level"] = "CRITICAL"  # noqa: F405
 
 # Isolated bucket for tests — never touch the dev bucket
 AWS_STORAGE_BUCKET_NAME = "saasvault-test"  # noqa: F405
+
+# Capture outgoing emails in memory for assertions — no real SMTP in tests
+EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"  # noqa: F405

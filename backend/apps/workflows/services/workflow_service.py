@@ -237,6 +237,14 @@ def start_workflow(
             "status": WorkflowStatus.IN_PROGRESS,
         },
     )
+
+    # Notify users with the first step's required_role after the transaction commits.
+    transaction.on_commit(
+        lambda step=first_step, exec_=execution: _notify_step_assigned(
+            organization, exec_, step
+        )
+    )
+
     logger.info(
         "Workflow started: execution=%s document=%s (org=%s)",
         execution.id,
@@ -328,6 +336,14 @@ def advance_step(
             execution.current_step = next_step
             execution.save(update_fields=["current_step", "updated_at"])
 
+            if next_step is not None:
+                # Notify users with the next step's required_role after commit.
+                transaction.on_commit(
+                    lambda s=next_step, exec_=execution: _notify_step_assigned(
+                        organization, exec_, s
+                    )
+                )
+
     audit_service.log(
         organization=organization,
         user=user,
@@ -390,6 +406,21 @@ def cancel_workflow(
         new_values={"status": WorkflowStatus.CANCELLED},
     )
     return execution
+
+
+def _notify_step_assigned(
+    organization: "Organization",
+    execution: WorkflowExecution,
+    step: WorkflowStep,
+) -> None:
+    """Dispatch step-assigned notification. Import lazy to avoid circular import."""
+    from apps.notifications.services import notification_service
+
+    notification_service.notify_step_assigned(
+        organization=organization,
+        execution=execution,
+        step=step,
+    )
 
 
 def _set_document_status(
