@@ -1707,17 +1707,19 @@ side-effects de workflow (email al siguiente revisor). El backend está al 100% 
 notifications + health + logging; el frontend usa Vitest + Testing Library, contados aparte
 como ~40–60 tests de UI). Meta de cobertura backend: mantener ≥ 95%.
 
+**Métricas actuales (2026-06-10):** 522 tests backend + 22 tests frontend. Cobertura backend: 95%.
+
 **Mapa de sub-fases:**
 
 | Sub-fase | Área | Toca backend | Toca frontend | Toca infra |
 |----------|------|:---:|:---:|:---:|
-| 5.1 | Frontend setup + auth | — | ✅ | — |
+| 5.1 | Frontend setup + auth — **COMPLETA (2026-06-10)** | — | ✅ | — |
 | 5.2 | Frontend gestión documental | — | ✅ | — |
 | 5.3 | Frontend workflows + auditoría | — | ✅ | — |
 | 5.4 | CI/CD GitHub Actions | ✅ (config) | ✅ (build) | — |
 | 5.5 | Deploy VPS (Gunicorn+Nginx+SSL) | ✅ (settings prod) | ✅ (build estático) | ✅ |
 | 5.6 | Observabilidad (Sentry, logs, health) — **COMPLETA (backend)** | ✅ | ✅ | — |
-| 5.7 | Notificaciones email en workflows | ✅ (`apps/notifications`) | — | — |
+| 5.7 | Notificaciones email en workflows — **COMPLETA (2026-06-10)** | ✅ (`apps/notifications`) | — | — |
 
 ### Decisiones globales de Fase 5 (cerradas — no re-discutir durante la implementación)
 
@@ -1857,19 +1859,22 @@ Backend: añadir `django-cors-headers` (~4.4) a `requirements.txt`, habilitado S
 `development.py` con `CORS_ALLOWED_ORIGINS=["http://localhost:5173"]` (puerto Vite). En prod
 NO se usa (mismo origen).
 
-#### DoD
+#### DoD — ✅ COMPLETADO (2026-06-10)
 
-- [ ] `frontend/` scaffolding corriendo: `npm run dev` sirve en `localhost:5173`.
-- [ ] Tailwind + shadcn/ui operativos (un `<Button>` renderiza con estilos).
-- [ ] `api-client.ts`: inyecta `Authorization: Bearer`, y ante 401 refresca el token y
+- [x] `frontend/` scaffolding corriendo: `npm run dev` sirve en `localhost:5173`.
+- [x] Tailwind + shadcn/ui operativos (componentes con estilos Slate).
+- [x] `api-client.ts`: inyecta `Authorization: Bearer`, y ante 401 refresca el token y
       reintenta la request original una sola vez; si el refresh falla → logout + redirect.
-- [ ] Login funcional contra `/api/v1/auth/login/` (backend en dev); guarda tokens.
-- [ ] `<ProtectedRoute>` redirige a `/login` si no hay sesión; el `AppLayout` (sidebar +
-      header) se muestra autenticado.
-- [ ] Logout llama `/auth/logout/` (blacklist) y limpia el estado.
-- [ ] CORS habilitado en `development.py`; `manage.py check` limpio; suite backend sigue
+      Cola `isRefreshing + failedQueue` garantiza exactamente 1 refresh para N 401 concurrentes.
+- [x] Login funcional contra `/api/v1/auth/login/` (backend en dev); guarda tokens.
+- [x] `<ProtectedRoute>` redirige a `/login` si no hay sesión; restauración silenciosa desde
+      `refreshToken` en `localStorage`. El `AppLayout` (sidebar + header) se muestra autenticado.
+- [x] Logout llama `/auth/logout/` (blacklist) y limpia el estado.
+- [x] CORS habilitado en `development.py`; `manage.py check` limpio; suite backend sigue
       verde tras añadir `django-cors-headers`.
-- [ ] Tests Vitest del store de auth y del interceptor de refresh (mock con MSW).
+- [x] Tests Vitest del store de auth (12 tests) y del interceptor de refresh (10 tests,
+      incluyendo test del queue pattern concurrente). Total: 22 tests frontend en verde.
+- [x] `npm run build` → 0 errores TypeScript, 0 warnings.
 
 #### Commits sugeridos
 
@@ -2446,21 +2451,24 @@ infra: cuenta SendGrid (free 100 emails/día) + dominio verificado (SPF/DKIM) pa
        caiga en spam. En dev/CI no se necesita: console/locmem backend.
 ```
 
-#### DoD
+#### DoD — ✅ COMPLETADO (2026-06-10)
 
-- [ ] Modelo `Notification` (BaseModel, FK org obligatoria, índices); migración revisada a
-      mano.
-- [ ] `notification_service.notify_step_assigned` crea el `Notification` y programa la task
-      vía `on_commit`; `_send` usa `EmailMultiAlternatives` (HTML + texto).
-- [ ] Selector tenant-safe que resuelve destinatarios por `required_role` dentro de la org.
-- [ ] `workflow_service.advance_step`/`start_workflow` encolan la notificación al entrar a un
-      nuevo paso, vía `transaction.on_commit` (verificado en test con `transaction=True`).
-- [ ] `EMAIL_BACKEND` por entorno: console (dev), locmem (test), SMTP/SendGrid (prod).
-- [ ] La task reintenta ante error transitorio de SMTP y marca `failed` ante fallo
-      permanente; no reenvía una notificación `sent`.
-- [ ] Tests: destinatario correcto por rol, tenant isolation (no se notifica a usuarios de
-      otra org), `mail.outbox` recibe el email en test, on_commit dispara la task, idempotencia.
-- [ ] drf-spectacular sigue en 0 errors / 0 warnings (no hay endpoints nuevos, pero verificar).
+- [x] Modelo `Notification` (BaseModel, FK org obligatoria, índices compuestos
+      `idx_notifications_org_recipient` e `idx_notifications_org_status`); migración 0001.
+- [x] `notification_service.notify_step_assigned` crea el `Notification` y programa la task
+      vía `on_commit`; `_send` usa SMTP → `TransientError` en caso de fallo de red.
+- [x] Selector tenant-safe `get_recipients_for_role(organization, role)` que resuelve
+      destinatarios filtrando por rol dentro de la org.
+- [x] `workflow_service.advance_step`/`start_workflow` encolan la notificación al entrar a un
+      nuevo paso, vía `transaction.on_commit`. Lazy import para evitar circular imports.
+- [x] `EMAIL_BACKEND` por entorno: console (dev), locmem (test), SMTP/SendGrid (prod).
+      `DEFAULT_FROM_EMAIL`, `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_USE_TLS`, credenciales por env.
+- [x] La task `send_notification` usa `autoretry_for=(TransientError,)` y marca `failed`
+      ante fallo permanente; idempotente (no reenvía notificación `sent`).
+- [x] Tests: 21 nuevos (selector: 5, service: 8, tasks: 2, workflow_notifications: 6).
+      Cubre destinatario correcto por rol, tenant isolation, `mail.outbox`, on_commit.
+- [x] `apps.notifications` registrada en `INSTALLED_APPS` (base.py).
+- [x] drf-spectacular sigue en 0 errors / 0 warnings.
 
 #### Commits sugeridos
 

@@ -11,8 +11,8 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Tests integración MinIO cerrados** (2026-06-09). 528 tests, 99% cobertura.
-> Próximo hito: Fase 5.1 (scaffold frontend React+TS+Vite, login con JWT).
+> Última actualización: **Fases 5.1 y 5.7 completas** (2026-06-10). 522 tests backend + 22 frontend.
+> Próximo hito: Fase 5.2 (Frontend gestión documental: folder browser, document list/detail, upload, OCR badge, FTS).
 
 ---
 
@@ -814,7 +814,7 @@ git commit -m "feat(scope): descripción en imperativo, sin punto final"
 > capa de auditoría + workflows + búsqueda (Fase 3) y el procesamiento asíncrono con OCR
 > (Fase 4). Escrito en lenguaje llano, con las complicaciones tal como pasaron.
 
-## Mapa rápido de dónde estamos (2026-06-04)
+## Mapa rápido de dónde estamos (2026-06-10)
 
 | Fase | Qué es | Estado |
 |------|--------|--------|
@@ -828,10 +828,13 @@ git commit -m "feat(scope): descripción en imperativo, sin punto final"
 | 4.2 | Pipeline OCR real (PDF + imágenes → texto buscable) | ✅ |
 | 4.3 | Limpieza periódica de archivos huérfanos en MinIO | ✅ |
 | 4.4 | Análisis con IA (Claude API) — opcional | ✅ |
+| 5.6 | Observabilidad: health check, Sentry, JSON logging (backend) | ✅ |
+| 5.1 | Frontend: scaffold React+TS+Vite + auth (login, tokens, layout) | ✅ |
+| 5.7 | Notificaciones email por workflow (nueva app `notifications`) | ✅ |
 
-**445 tests en verde, 99% de cobertura.** Los tests corren contra PostgreSQL real (no
-SQLite en memoria); si fallan con "connection refused" es que falta `docker compose up -d`,
-no es un bug del código.
+**522 tests backend + 22 tests frontend (2026-06-10). Cobertura backend: 95%.** Los tests
+backend corren contra PostgreSQL real; si fallan con "connection refused" es que falta
+`docker compose up -d`, no es un bug del código.
 
 ---
 
@@ -1263,6 +1266,78 @@ costo en llamadas repetidas. Nueva excepción `AIServiceUnavailable` (503) en
 `apps/core/exceptions.py`.
 
 Ver `docs/phase-plan.md` §4.3 y §4.4 para el plan completo con contratos, tests y DoD.
+
+---
+
+## 2026-06-10 — Fases 5.1 y 5.7 completas: frontend scaffold + auth y notificaciones email
+
+**Resumen de la sesión:** se implementaron dos sub-fases de Fase 5 de forma independiente y
+paralela. El frontend tiene ahora su cimiento completo; el backend cierra la deuda de
+notificaciones que quedó pendiente desde Fase 3.
+
+### Fase 5.1 — Frontend: scaffold + autenticación
+
+El punto de partida del frontend. Se tomaron muchas decisiones de arquitectura antes de
+escribir la primera línea de código — decisiones que afectan todo lo que viene en 5.2 y 5.3.
+
+**Estructura elegida (feature-based, no layer-based):** cada dominio funcional agrupa sus
+propios componentes, hooks y llamadas a API. Espeja el monolito modular del backend. Lo
+transversal va en `shared/` y `lib/`. Razón: una carpeta `components/` con 80 archivos
+es inmanejable; cohesión por dominio es más fácil de navegar y de escalar.
+
+**La pieza más interesante: el interceptor de refresh en `api-client.ts`.**
+El problema: si el access token expira mientras el usuario tiene N tabs abiertos o N
+requests en vuelo, todos reciben 401 al mismo tiempo. Sin coordinación, N requests
+intentarían refrescar el token simultáneamente — y el primero que lo logra invalida el
+refresh token rotativo, dejando los demás en un loop de 401. La solución es una cola:
+un flag `isRefreshing` y un array `failedQueue` de resolvers pendientes. El primer 401
+setea el flag, hace el refresh, y cuando resuelve vacía la cola reintentando todas las
+requests originales con el nuevo token. Los 401 subsiguientes (mientras el flag está
+activo) simplemente se suman a la cola. Exactamente 1 refresh para N 401. Hay un test
+explícito de este comportamiento concurrente.
+
+**Decisión de almacenamiento de tokens:** `accessToken` en memoria (Zustand), nunca en
+`localStorage`. `refreshToken` en `localStorage` para sobrevivir reloads. El trade-off de
+seguridad (XSS) está documentado como deuda consciente; migrar a cookies httpOnly queda para
+cuando el backend soporte `set-cookie`.
+
+**Stack de UI:** Vite 8 + React 18 + TypeScript + Tailwind v3 + shadcn/ui (tema Slate).
+TanStack Query v5 para server state. Zustand v5 para client state (solo sesión de auth,
+sidebar, toasts — nada del servidor). react-hook-form + zod para formularios.
+`createBrowserRouter` (data router de React Router v6.4+).
+
+**Tests:** 22 tests Vitest en verde. `store.test.ts` (12): cubre login, logout, persistencia
+de refresh en localStorage, restauración silenciosa, limpieza de tokens. `interceptor.test.ts`
+(10): cubre inyección del Bearer header, retry tras refresh, logout ante refresh fallido, y
+el queue pattern para N 401 simultáneos. `npm run build` sin errores de tipos.
+
+### Fase 5.7 — Notificaciones email por workflow
+
+Cierra el placeholder que quedó en Fase 3.2 ("config/actions JSONB reservado para
+notificaciones") y en Fase 4 ("notificaciones diferidas a Fase 5").
+
+**Nueva app `apps/notifications`** (ya existía como skeleton vacío). Modelo `Notification`
+hereda de `BaseModel` con FK obligatoria a `Organization` — consistent con la regla de
+multi-tenancy del proyecto. Índices compuestos `(organization, recipient)` y
+`(organization, status)` para consultas futuras de observabilidad.
+
+**Decisión de desacoplamiento:** `workflow_service` no importa directamente el backend de
+email ni crea emails. Encola un evento llamando a `notification_service.notify_step_assigned`,
+que crea el registro `Notification` (status `pending`) y programa la task via
+`transaction.on_commit`. El acoplamiento es vía service, no vía transporte. Esto significa
+que el día que se agregue notificación in-app o push, solo cambia la capa de transporte
+(`_send`), no el workflow ni el modelo.
+
+**Lazy import para evitar circulares:** `workflow_service` importa `notification_service`
+dentro de la función que lo llama (no a nivel de módulo). Evita el ciclo de importación
+entre dos apps de dominio que se necesitan mutuamente.
+
+**Tests:** 21 nuevos tests pytest en verde: selector (5), service (8), tasks (2),
+workflow_notifications (6). Cubre destinatario correcto por rol, tenant isolation, verificación
+de `mail.outbox` con backend locmem, que `on_commit` dispara la task, e idempotencia.
+
+**Métricas finales:** 522 tests backend (495 normales + 27 integración) + 22 frontend.
+Cobertura backend: 95%.
 
 ---
 

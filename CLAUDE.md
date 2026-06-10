@@ -695,7 +695,7 @@ fix/{name}    ← Corrección de bugs
 
 ## 17. Estado actual del proyecto
 
-**Fase actual:** Fase 5 EN CURSO. 5.6 (observabilidad) COMPLETA; siguiente: 5.1 (Frontend setup + auth). Plan completo de 7 sub-fases documentado en `docs/phase-plan.md` §5.
+**Fase actual:** Fase 5 EN CURSO. 5.1 (Frontend setup+auth) y 5.7 (Notificaciones email) COMPLETAS; siguiente: 5.2 (Frontend gestión documental). Plan completo de 7 sub-fases documentado en `docs/phase-plan.md` §5.
 
 **Completado:**
 - [x] **Fase 0** — Setup completo: WSL2, Docker Compose (PG16 + Redis7 + MinIO),
@@ -758,14 +758,16 @@ fix/{name}    ← Corrección de bugs
 - [x] drf-spectacular configurado y operativo (0 errors / 0 warnings)
 - [x] Documentación API (Swagger UI en `/api/docs/`, Redoc en `/api/redoc/`)
 
-**Métricas:** 528 tests pasando, cobertura 99% (501 suite normal + 27 integración con MinIO, 2026-06-09).
-Nota: los tests requieren PostgreSQL real corriendo (`docker compose up -d`); si falla
+**Métricas:** 522 tests backend + 22 tests frontend (2026-06-10). Cobertura backend: 95%.
+Suite backend: 495 tests normales + 27 integración con MinIO (`@pytest.mark.integration`).
+Frontend: 22 tests Vitest en `frontend/src/features/auth/__tests__/`.
+Nota: los tests backend requieren PostgreSQL real corriendo (`docker compose up -d`); si falla
 con `connection refused` en `localhost:5432`, la infra está apagada — no es un fallo
 de código.
 
 **Apps activas en INSTALLED_APPS:**
 `apps.core`, `apps.organizations`, `apps.authentication`, `apps.permissions`,
-`apps.audit`, `apps.documents`, `apps.workflows`, `apps.search`
+`apps.audit`, `apps.documents`, `apps.workflows`, `apps.search`, `apps.notifications`
 
 **Decisiones de diseño cerradas de Fase 2 (ya implementadas, no re-discutir):**
 1. `AuditLog` usa `BigAutoField` (no UUID) y NO hereda `BaseModel` — inmutable,
@@ -846,6 +848,22 @@ de código.
     `RequestContextFilter` inyecta `organization_id`/`user_id`/`request_id` vía
     thread-local — requiere que `OrganizationTenantMiddleware` llame a
     `set_request_context()` (deuda técnica documentada, no bloquea).
+28. **`accessToken` en memoria (Zustand), `refreshToken` en `localStorage`** — el access
+    nunca toca `localStorage` (reduce superficie XSS); el refresh sobrevive reloads.
+    Trade-off de seguridad documentado: migrar a httpOnly cookies queda para Fase 6.
+29. **Cola de refresh en `api-client.ts`** (`isRefreshing` flag + `failedQueue`): N requests
+    que reciben 401 simultáneamente encolan sus resolvers, el primero dispara el refresh, y
+    cuando resuelve todos los encolados se reintentán con el nuevo token. Garantiza exactamente
+    1 refresh para N 401 concurrentes (evita invalidar el refresh rotativo).
+30. **`apps/notifications` es app de dominio** (BaseModel + FK a Organization), no utilidad
+    suelta. `workflow_service` la llama via lazy import (`from apps.notifications...` dentro de
+    la función) para evitar importaciones circulares entre apps de dominio.
+31. **Notificaciones se envían solo al rol exacto del paso** (`required_role`), no a
+    org_admin/super_admin por su override. Solo se notifica en "paso asignado" (avance a nuevo
+    paso). Notificar en reject/cancel/complete = mejora incremental futura.
+32. **SMTP errors → `TransientError` → `autoretry`** en `send_notification`. Una notificación
+    ya `sent` no se reenvía (guard en `_send`). Si falla definitivamente → `Notification.status=failed`
+    (observable). Sin retry-loop para errores permanentes.
 
 **4.0 (pre-flight) COMPLETA (2026-06-02, rama `feature/celery-ocr-pipeline`):** deps pip
 fijadas (`pdf2image`, `pytesseract`); `StorageService.download_file()` + test; settings
@@ -873,8 +891,22 @@ transitorio (timeout)→retry, permanente (NoSuchKey/corrupto)→failed; endpoin
 - [x] **Fase 4.4 (análisis IA — opcional) COMPLETA (2026-06-03):** `ai_service.analyze()` con Claude Haiku + prompt caching; feature-flag (`ANTHROPIC_API_KEY` vacía → 503); `POST /documents/{id}/analyze/` (Editor+, 202 async); resultado en `metadata["ai_analysis"]`; sin nueva migración (JSONB existente). 442 tests, 99%.
 - [x] **Auditoría de Fase 4 (2026-06-04):** 3 correcciones post-auditoría: `ai_service` mapea errores SDK Anthropic a `TransientError`; `reprocess_ocr` resetea `ocr_status` a `PENDING`; `max_retries=3` inline en decoradores de tasks.
 - [x] **Fase 5.6 (observabilidad) COMPLETA (2026-06-04):** `GET /api/v1/health/` (público, sin envelope); `health_service` con 3 checkers (DB/Redis/MinIO); `RequestContextFilter` para JSON logs; Sentry gateado por `SENTRY_DSN`. 501 tests, 99%.
+- [x] **Fase 5.1 (Frontend setup + auth) COMPLETA (2026-06-10):** `frontend/` scaffolded con
+  Vite 8 + React 18 + TypeScript + Tailwind v3 + shadcn/ui (Slate). `api-client.ts` con
+  interceptores axios: Bearer header, cola de refresh (`isRefreshing + failedQueue`) para N
+  401 concurrentes → exactamente 1 refresh. `useAuthStore` (Zustand v5): accessToken en
+  memoria, refreshToken en localStorage. Auth API + hooks (TanStack Query v5). `LoginForm`
+  (react-hook-form + zod), `ProtectedRoute` con restauración silenciosa desde refresh,
+  `AppLayout` + `Sidebar` + `Header` con nav por roles. `createBrowserRouter` (data router).
+  22 tests Vitest (store: 12, interceptor: 10). `npm run build` → 0 errores TS.
+- [x] **Fase 5.7 (Notificaciones email) COMPLETA (2026-06-10):** `apps/notifications/` nueva
+  app completa: `Notification(BaseModel)` con FK a Organization, índices compuestos, migración
+  0001. `notification_service.notify_step_assigned` + `_send` (SMTP → TransientError).
+  `NotificationSelector.get_recipients_for_role`. Task `send_notification` (autoretry, idempotente).
+  `workflow_service` encola notificaciones via `transaction.on_commit` (lazy import). `EMAIL_BACKEND`
+  por entorno: console/locmem/SMTP. 21 tests nuevos. `apps.notifications` en INSTALLED_APPS.
 
-**Próximo paso:** Fase 5.1 — scaffold React+TS+Vite, Tailwind, shadcn/ui; login con JWT; interceptor de refresh automático. El usuario tiene experiencia limitada en frontend — cada sub-fase de frontend requiere explicación detallada además de implementación.
+**Próximo paso:** Fase 5.2 — Frontend gestión documental: folder browser con breadcrumb, document list/detail, upload drag & drop con progreso, OCR status badge con polling, búsqueda global. El usuario tiene experiencia limitada en frontend — cada sub-fase requiere explicación detallada además de implementación.
 
 Ver `docs/phase-plan.md` para el plan completo de desarrollo.
 
