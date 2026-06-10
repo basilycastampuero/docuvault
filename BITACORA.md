@@ -1295,6 +1295,20 @@ Flake8 limpio, cobertura 99% mantenida.
 
 ---
 
+## 2026-06-09 — Dependencia de sistema faltante: `redis-tools`
+
+`redis-cli` (usado en pruebas manuales de Redis) requiere el paquete apt `redis-tools`,
+que no viene preinstalado en Ubuntu/WSL2. Se identificó al intentar verificar Redis desde
+la terminal sin el binario disponible.
+
+Documentación actualizada:
+- `docs/manual-testing.md` — nota en la sección Redis (Nivel 1) y en la sección
+  "redis-cli — Inspección de Redis" con el comando de instalación.
+- `backend/.env.example` — añadido `redis-tools` a la lista consolidada de dependencias
+  apt del proyecto (junto a `tesseract-ocr`, `poppler-utils`, `libmagic1`).
+
+---
+
 ## Ideas y pendientes anotados (para no perderlos)
 
 - ✅ **OCR real (Fase 4.2 — hecho):** cada documento subido ya es buscable por su contenido

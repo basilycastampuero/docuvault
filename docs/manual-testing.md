@@ -88,6 +88,11 @@ Salida esperada: tablas como `organizations`, `users`, `documents`, `folders`, `
 
 ### Redis
 
+> `redis-cli` requiere el paquete `redis-tools` (no viene preinstalado en Ubuntu/WSL2):
+> ```bash
+> sudo apt-get install -y redis-tools
+> ```
+
 ```bash
 redis-cli ping
 # Esperado: PONG
@@ -258,6 +263,7 @@ curl -s -X POST http://localhost:8000/api/v1/auth/logout/ \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"refresh\":\"$REFRESH\"}"
+
 # Esperado: 204 No Content
 
 # Intentar usar el refresh después del logout — esperado: 401
@@ -442,7 +448,7 @@ curl -s http://localhost:8000/api/v1/users/ \
 ---
 
 ## Nivel 4: Gestión documental
-
+# Aqui me quedé en la ultima sesion 10/06 -V
 ### Crear jerarquía de carpetas
 
 ```bash
@@ -1228,6 +1234,9 @@ WHERE we.status IN ('pending','in_progress');
 ```
 
 ### redis-cli — Inspección de Redis
+
+> Requiere `redis-tools` (`sudo apt-get install -y redis-tools`).
+
 
 ```bash
 # Ping
