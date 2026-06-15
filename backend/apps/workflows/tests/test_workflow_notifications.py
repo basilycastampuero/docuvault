@@ -188,3 +188,66 @@ class TestAdvanceStepNotifications:
         assert admin1.email in sent_recipients
         assert admin2.email in sent_recipients
         assert supervisor.email not in sent_recipients
+
+
+@pytest.mark.django_db(transaction=True)
+class TestCancelAndRollbackNotifications:
+    def test_cancel_workflow_sends_no_notification(self):
+        """cancel_workflow does not generate notifications."""
+        from apps.notifications.models import Notification
+
+        org = OrganizationFactory()
+        admin = UserFactory(organization=org, role=UserRole.ORG_ADMIN)
+        UserFactory(organization=org, role=UserRole.SUPERVISOR)
+        template, _step1, _step2 = _build_two_step_template(org)
+        doc = DocumentFactory(organization=org)
+
+        # Start a workflow so we have an execution to cancel.
+        # Clearing outbox after start so we only count cancel-related mails.
+        mail.outbox.clear()
+        execution = workflow_service.start_workflow(
+            organization=org, user=admin, document=doc, template=template
+        )
+        mail.outbox.clear()
+
+        workflow_service.cancel_workflow(
+            organization=org, user=admin, execution=execution
+        )
+
+        # Cancel must not send any notification.
+        assert len(mail.outbox) == 0
+        # Also assert no Notification objects were created by cancel.
+        # (The ones from start_workflow are already committed; we check delta.)
+        assert (
+            Notification.objects.filter(
+                metadata__has_key="execution_id",
+                metadata__execution_id=str(execution.id),
+            ).count()
+            == 1
+        )  # only the one created by start_workflow
+
+    def test_notification_not_sent_on_rollback(self):
+        """on_commit does not fire if start_workflow rolls back."""
+        from unittest.mock import patch
+
+        org = OrganizationFactory()
+        admin = UserFactory(organization=org, role=UserRole.ORG_ADMIN)
+        UserFactory(organization=org, role=UserRole.SUPERVISOR)
+        template, _step1, _step2 = _build_two_step_template(org)
+        doc = DocumentFactory(organization=org)
+
+        mail.outbox.clear()
+
+        # Patch _set_document_status to raise inside the transaction so the
+        # whole atomic block rolls back (including the on_commit callback).
+        with patch(
+            "apps.workflows.services.workflow_service._set_document_status",
+            side_effect=RuntimeError("Simulated failure — force rollback"),
+        ):
+            with pytest.raises(RuntimeError):
+                workflow_service.start_workflow(
+                    organization=org, user=admin, document=doc, template=template
+                )
+
+        # on_commit callbacks are suppressed on rollback — no email should go out.
+        assert len(mail.outbox) == 0

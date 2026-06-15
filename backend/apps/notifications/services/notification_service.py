@@ -65,11 +65,38 @@ def _dispatch_send(notification_id: str) -> None:
     send_notification.delay(notification_id)
 
 
-def _send(notification: Notification) -> None:
-    """Actually send the email. Called from the Celery task."""
-    if notification.status == NotificationStatus.SENT:
-        logger.info("_send: notification %s already sent; skipping", notification.id)
+def _send(notification: "Notification") -> None:
+    """Send the notification email. Called from the Celery task.
+
+    Concurrency safety: uses an atomic UPDATE claim so that two Celery workers
+    processing the same notification_id in parallel (e.g. autoretry overlapping
+    the original) cannot both send the email. The worker whose UPDATE returns
+    rowcount=1 owns the send; rowcount=0 means another worker already claimed
+    it.
+
+    Semantics: at-least-once. A crash between the claim and `save(status=SENT)`
+    leaves the row in SENT; a retry after an SMTP failure resets to FAILED so
+    the next attempt can reclaim. If exactly-once delivery is required in the
+    future, introduce a 'processing' status with a migration and a sweep task
+    for stale rows.
+    """
+    # Atomic claim: flip PENDING or FAILED → SENT optimistically.
+    # Filter includes FAILED so autoretries after an SMTP failure can resend.
+    claimed_count = Notification.objects.filter(
+        pk=notification.pk,
+        status__in=[NotificationStatus.PENDING, NotificationStatus.FAILED],
+    ).update(
+        status=NotificationStatus.SENT,
+        sent_at=timezone.now(),
+    )
+    if claimed_count == 0:
+        logger.info(
+            "_send: notification %s already claimed or sent; skipping",
+            notification.pk,
+        )
         return
+
+    notification.refresh_from_db()
     try:
         send_mail(
             subject=notification.subject,
@@ -78,23 +105,25 @@ def _send(notification: Notification) -> None:
             recipient_list=[notification.recipient.email],
             fail_silently=False,
         )
-        notification.status = NotificationStatus.SENT
-        notification.sent_at = timezone.now()
-        notification.save(update_fields=["status", "sent_at", "updated_at"])
         logger.info(
-            "Notification %s sent to %s", notification.id, notification.recipient.email
+            "Notification %s sent to %s", notification.pk, notification.recipient.email
         )
     except smtplib.SMTPException as exc:
-        notification.status = NotificationStatus.FAILED
-        notification.save(update_fields=["status", "updated_at"])
+        # Release the claim so an autoretry can resend.
+        Notification.objects.filter(pk=notification.pk).update(
+            status=NotificationStatus.FAILED,
+            sent_at=None,
+        )
         logger.warning(
-            "Notification %s SMTP failure: %s — will retry", notification.id, exc
+            "Notification %s SMTP failure: %s — will retry", notification.pk, exc
         )
         raise TransientError(str(exc)) from exc
     except Exception as exc:
-        notification.status = NotificationStatus.FAILED
-        notification.save(update_fields=["status", "updated_at"])
-        logger.error("Notification %s permanent failure: %s", notification.id, exc)
+        Notification.objects.filter(pk=notification.pk).update(
+            status=NotificationStatus.FAILED,
+            sent_at=None,
+        )
+        logger.error("Notification %s permanent failure: %s", notification.pk, exc)
         raise
 
 

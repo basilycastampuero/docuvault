@@ -172,3 +172,57 @@ class TestSend:
 
         notif.refresh_from_db()
         assert notif.status == NotificationStatus.FAILED
+
+    def test_send_concurrent_claim_sends_once(self):
+        """Simulates two workers with the same stale PENDING instance — only one email sent."""
+        from django.test.utils import override_settings
+
+        org = OrganizationFactory()
+        recipient = UserFactory(organization=org)
+        notif = self._make_pending_notification(org=org, recipient=recipient)
+
+        with override_settings(
+            EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend"
+        ):
+            mail.outbox = []
+            # First worker wins the atomic claim and sends the email.
+            notification_service._send(notif)
+            assert len(mail.outbox) == 1
+
+            # Second worker has a stale Python object with status=PENDING, but
+            # the DB row is now SENT. The atomic UPDATE returns rowcount=0 → skip.
+            notif_stale = Notification.objects.get(pk=notif.pk)
+            # Manually set to PENDING in memory only (do NOT save) to simulate
+            # a stale task that was enqueued before the first worker ran.
+            notif_stale.status = NotificationStatus.PENDING
+            notification_service._send(notif_stale)
+
+            assert len(mail.outbox) == 1  # still only one email
+
+    def test_send_failure_releases_claim_for_retry(self):
+        """After SMTP failure the row returns to FAILED; the next attempt can resend."""
+        from apps.core.exceptions import TransientError
+
+        org = OrganizationFactory()
+        recipient = UserFactory(organization=org)
+        notif = self._make_pending_notification(org=org, recipient=recipient)
+
+        # First attempt: SMTP fails → claim released back to FAILED.
+        with patch(
+            "apps.notifications.services.notification_service.send_mail",
+            side_effect=smtplib.SMTPException("Timeout"),
+        ):
+            with pytest.raises(TransientError):
+                notification_service._send(notif)
+
+        notif.refresh_from_db()
+        assert notif.status == NotificationStatus.FAILED
+        assert len(mail.outbox) == 0
+
+        # Second attempt: SMTP succeeds → claim is taken again, email sent.
+        notification_service._send(notif)
+
+        notif.refresh_from_db()
+        assert notif.status == NotificationStatus.SENT
+        assert len(mail.outbox) == 1
+        assert recipient.email in mail.outbox[0].to
