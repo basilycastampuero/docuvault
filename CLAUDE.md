@@ -32,7 +32,7 @@ apps/
 ### Regla de oro services vs views
 
 ```python
-# ✅ CORRECTO — La view solo orquesta
+#  CORRECTO — La view solo orquesta
 class DocumentUploadView(APIView):
     def post(self, request):
         serializer = DocumentUploadSerializer(data=request.data)
@@ -44,7 +44,7 @@ class DocumentUploadView(APIView):
         )
         return Response(DocumentSerializer(document).data, status=201)
 
-# ❌ INCORRECTO — Lógica de negocio en la view
+#  INCORRECTO — Lógica de negocio en la view
 class DocumentUploadView(APIView):
     def post(self, request):
         file = request.FILES['file']
@@ -92,11 +92,11 @@ class Document(BaseModel):
 **Middleware:** inyecta `request.organization` en cada request autenticado. Services y selectors SIEMPRE reciben `organization` como parámetro explícito.
 
 ```python
-# ✅ CORRECTO
+#  CORRECTO
 def get_documents(organization, user, filters=None):
     return Document.objects.filter(organization=organization, ...)
 
-# ❌ INCORRECTO
+#  INCORRECTO
 def get_documents():
     return Document.objects.all()
 ```
@@ -124,10 +124,10 @@ Entidades críticas: `Document`, `DocumentVersion`, `Folder`, `Workflow`, `Audit
 **NUNCA usar `.delete()` directo.** Usar el servicio de soft delete.
 
 ```python
-# ✅ CORRECTO
+#  CORRECTO
 document_service.soft_delete(document, deleted_by=request.user)
 
-# ❌ INCORRECTO
+#  INCORRECTO
 document.delete()
 ```
 
@@ -188,11 +188,11 @@ models.Index(
 ### Prevención de N+1 — OBLIGATORIO en selectors
 
 ```python
-# ❌ INCORRECTO — N+1 al serializar
+#  INCORRECTO — N+1 al serializar
 def get_documents(organization):
     return Document.objects.filter(organization=organization)
 
-# ✅ CORRECTO
+#  CORRECTO
 def get_documents(organization):
     return (
         Document.objects
@@ -332,7 +332,7 @@ Eventos a auditar: login/logout/refresh, CRUD de documentos, cambios de permisos
 Auditoría desde **services**, nunca desde views.
 
 ```python
-# ✅ CORRECTO — desde el service
+#  CORRECTO — desde el service
 def update_document(organization, user, document, **data):
     old_values = DocumentSerializer(document).data
     document = _apply_changes(document, data)
@@ -375,13 +375,13 @@ DEBUG = config('DJANGO_DEBUG', default=False, cast=bool)
 Definidas en `apps/{app}/tasks/`. Nunca lógica de negocio dentro — llamar a services.
 
 ```python
-# ✅ CORRECTO
+#  CORRECTO
 @shared_task
 def process_document_ocr(document_id: str):
     document = Document.objects.get(id=document_id)
     ocr_service.process(document)
 
-# ❌ INCORRECTO — lógica directa en la task
+#  INCORRECTO — lógica directa en la task
 @shared_task
 def process_document_ocr(document_id: str):
     document = Document.objects.get(id=document_id)
@@ -409,7 +409,7 @@ backend/config/settings/
 - Nombres descriptivos en inglés
 
 ```python
-# ✅ CORRECTO
+#  CORRECTO
 def get_documents_by_folder(
     organization: Organization,
     folder: Folder,
@@ -419,7 +419,7 @@ def get_documents_by_folder(
     """Return documents inside a folder visible to the given user."""
     ...
 
-# ❌ INCORRECTO
+#  INCORRECTO
 def get_docs(org, f, u, d=False):
     return Document.objects.filter(org=org, folder=f)
 ```
