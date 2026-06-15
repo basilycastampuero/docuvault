@@ -13,7 +13,7 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { useLogin } from '../hooks'
-import type { ApiError } from '@/shared/types'
+import { ApiError } from '@/shared/types'
 
 // ─── Validation schema ────────────────────────────────────────────────────────
 
@@ -41,14 +41,21 @@ export function LoginForm() {
     loginMutation.mutate(values)
   }
 
-  // Extraer mensaje de error del backend si existe
-  const apiErrorMessage =
-    loginMutation.error instanceof Error
-      ? (loginMutation.error as ApiError).code === 'INVALID_CREDENTIALS' ||
-        (loginMutation.error as ApiError).status === 401
-        ? 'Email o contraseña incorrectos'
-        : loginMutation.error.message
-      : null
+  // Extraer mensaje de error del backend con narrowing seguro
+  let apiErrorMessage: string | null = null
+  if (loginMutation.error) {
+    const err = loginMutation.error
+    if (err instanceof ApiError) {
+      apiErrorMessage =
+        err.code === 'INVALID_CREDENTIALS' || err.status === 401
+          ? 'Email o contraseña incorrectos'
+          : err.message
+    } else if (err instanceof Error) {
+      apiErrorMessage = err.message
+    } else {
+      apiErrorMessage = 'Error desconocido'
+    }
+  }
 
   return (
     <Card className="w-full max-w-md shadow-lg">

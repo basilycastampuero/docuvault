@@ -382,4 +382,15 @@ describe('Response interceptor — refresh flow', () => {
     // Refresh attempted exactly once — not in a loop
     expect(refreshCallCount).toBe(1)
   })
+
+  // ── Promise.reject guarantee when originalRequest is absent ───────────────
+
+  // TODO: test — refresh succeeded but originalRequest is undefined → rejects instead of resolving undefined.
+  // This branch (lines after the `if (originalRequest)` block) is unreachable via MSW because
+  // axios always populates error.config when it processes a response. Testing it requires either:
+  //   (a) calling the interceptor function directly with a synthetic AxiosError where config is undefined, or
+  //   (b) exposing and calling the interceptor handler in isolation.
+  // Neither is straightforward without refactoring api-client.ts to export the handler.
+  // The fix is nevertheless load-bearing as a safety net for callers that invoke the interceptor
+  // outside of a standard request flow.
 })

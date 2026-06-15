@@ -13,6 +13,7 @@ export function useLogin() {
   const setUser = useAuthStore((s) => s.setUser)
 
   return useMutation<void, ApiError, LoginCredentials>({
+    meta: { suppressGlobalToast: true },
     mutationFn: async (credentials: LoginCredentials) => {
       const tokens = await loginApi(credentials)
       // 1. Guardar access token en memoria (Zustand)
