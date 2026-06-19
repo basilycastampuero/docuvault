@@ -44,7 +44,7 @@ export function LoginForm() {
   // Extraer mensaje de error del backend con narrowing seguro
   let apiErrorMessage: string | null = null
   if (loginMutation.error) {
-    const err = loginMutation.error
+    const err: unknown = loginMutation.error
     if (err instanceof ApiError) {
       apiErrorMessage =
         err.code === 'INVALID_CREDENTIALS' || err.status === 401

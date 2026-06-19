@@ -1,4 +1,6 @@
-import { LogOut } from 'lucide-react'
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { LogOut, Search } from 'lucide-react'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import {
   DropdownMenu,
@@ -8,10 +10,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
 import { useAuthStore } from '@/features/auth/store'
 import { useLogout } from '@/features/auth/hooks'
 
-// Mapeo de roles a etiquetas legibles en español
 const ROLE_LABELS: Record<string, string> = {
   super_admin: 'Super Admin',
   org_admin: 'Administrador',
@@ -28,17 +30,37 @@ function getInitials(firstName: string, lastName: string): string {
 }
 
 export function Header() {
+  const navigate = useNavigate()
   const user = useAuthStore((s) => s.user)
   const logoutMutation = useLogout()
+  const [searchQuery, setSearchQuery] = useState('')
 
   const initials = user ? getInitials(user.first_name, user.last_name) : '?'
   const fullName = user ? `${user.first_name} ${user.last_name}`.trim() : ''
   const roleLabel = user ? (ROLE_LABELS[user.role] ?? user.role) : ''
 
+  const handleSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    const trimmed = searchQuery.trim()
+    if (trimmed) {
+      navigate(`/search?q=${encodeURIComponent(trimmed)}`)
+    }
+  }
+
   return (
-    <header className="flex h-14 items-center justify-between border-b border-border bg-card px-6">
-      {/* Podría incluir breadcrumbs aquí en fases futuras */}
-      <div />
+    <header className="flex h-14 items-center justify-between border-b border-border bg-card px-6 gap-4">
+      {/* Search */}
+      <form onSubmit={handleSearchSubmit} className="flex-1 max-w-sm">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Buscar documentos..."
+            className="pl-9 h-9 bg-background"
+          />
+        </div>
+      </form>
 
       {/* User menu */}
       <DropdownMenu>

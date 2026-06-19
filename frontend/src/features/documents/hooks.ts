@@ -1,0 +1,135 @@
+import { useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  documentsApi,
+  type ListDocumentsParams,
+  type UploadDocumentData,
+  type UpdateDocumentData,
+  type UploadVersionData,
+} from './api'
+
+export const documentKeys = {
+  all: ['documents'] as const,
+  list: (params: ListDocumentsParams = {}) => [...documentKeys.all, 'list', params] as const,
+  detail: (id: string) => [...documentKeys.all, id] as const,
+  versions: (id: string, page: number) => [...documentKeys.all, id, 'versions', page] as const,
+}
+
+export function useDocuments(params: ListDocumentsParams = {}) {
+  return useQuery({
+    queryKey: documentKeys.list(params),
+    queryFn: () => documentsApi.list(params),
+  })
+}
+
+export function useDocument(id: string) {
+  return useQuery({
+    queryKey: documentKeys.detail(id),
+    queryFn: () => documentsApi.getById(id),
+    enabled: !!id,
+    refetchInterval: (query) => {
+      const status = query.state.data?.ocr_status
+      if (status === 'pending' || status === 'processing') return 3000
+      return false
+    },
+  })
+}
+
+export function useDocumentVersions(id: string, page = 1) {
+  return useQuery({
+    queryKey: documentKeys.versions(id, page),
+    queryFn: () => documentsApi.getVersions(id, page),
+    enabled: !!id,
+  })
+}
+
+export function useUploadDocument() {
+  const queryClient = useQueryClient()
+  const [uploadProgress, setUploadProgress] = useState(0)
+
+  const mutation = useMutation({
+    mutationFn: (data: UploadDocumentData) =>
+      documentsApi.upload({
+        ...data,
+        onUploadProgress: setUploadProgress,
+      }),
+    onSuccess: () => {
+      setUploadProgress(0)
+      queryClient.invalidateQueries({ queryKey: documentKeys.all })
+    },
+    onError: () => {
+      setUploadProgress(0)
+    },
+  })
+
+  return { mutation, uploadProgress }
+}
+
+export function useUpdateDocument() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: UpdateDocumentData }) =>
+      documentsApi.update(id, data),
+    onSuccess: (_doc, variables) => {
+      queryClient.invalidateQueries({ queryKey: documentKeys.detail(variables.id) })
+      queryClient.invalidateQueries({ queryKey: documentKeys.all })
+    },
+  })
+}
+
+export function useDeleteDocument() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (id: string) => documentsApi.delete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: documentKeys.all })
+    },
+  })
+}
+
+export function useDownloadDocument() {
+  return useMutation({
+    mutationFn: (id: string) => documentsApi.getDownloadUrl(id),
+    onSuccess: (url) => {
+      window.open(url, '_blank')
+    },
+  })
+}
+
+export function useUploadVersion(documentId: string) {
+  const queryClient = useQueryClient()
+  const [uploadProgress, setUploadProgress] = useState(0)
+
+  const mutation = useMutation({
+    mutationFn: (data: UploadVersionData) =>
+      documentsApi.uploadVersion(documentId, {
+        ...data,
+        onUploadProgress: setUploadProgress,
+      }),
+    onSuccess: () => {
+      setUploadProgress(0)
+      queryClient.invalidateQueries({ queryKey: documentKeys.detail(documentId) })
+      queryClient.invalidateQueries({
+        queryKey: documentKeys.versions(documentId, 1),
+      })
+    },
+    onError: () => {
+      setUploadProgress(0)
+    },
+  })
+
+  return { mutation, uploadProgress }
+}
+
+export function useReprocessOcr() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (id: string) => documentsApi.reprocessOcr(id),
+    onSuccess: (_data, id) => {
+      queryClient.invalidateQueries({ queryKey: documentKeys.detail(id) })
+    },
+  })
+}

@@ -47,6 +47,57 @@ export class ApiError extends Error {
   }
 }
 
+// ─── Document domain types ─────────────────────────────────────────────────────
+
+export type OcrStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'skipped'
+
+export type DocumentStatus =
+  | 'draft'
+  | 'under_review'
+  | 'approved'
+  | 'rejected'
+  | 'archived'
+
+export interface Folder {
+  id: string
+  name: string
+  parent: string | null
+  owner: { id: string; email: string }
+  created_at: string
+  updated_at: string
+}
+
+export interface Document {
+  id: string
+  name: string
+  description: string
+  mime_type: string
+  file_size: number
+  checksum: string
+  storage_path: string
+  status: DocumentStatus
+  version: number
+  ocr_status: OcrStatus
+  ocr_content: string
+  tags: string[]
+  metadata: Record<string, unknown>
+  folder: { id: string; name: string } | null
+  created_by: { id: string; email: string }
+  created_at: string
+  updated_at: string
+}
+
+export interface DocumentVersion {
+  id: string
+  version_number: number
+  file_size: number
+  mime_type: string
+  checksum: string
+  created_by: { id: string; email: string }
+  change_description: string
+  created_at: string
+}
+
 // ─── Auth domain types ─────────────────────────────────────────────────────────
 
 export type UserRole =

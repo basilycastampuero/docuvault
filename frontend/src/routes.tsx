@@ -2,21 +2,11 @@ import { createBrowserRouter } from 'react-router-dom'
 import { LoginPage } from '@/features/auth/pages/LoginPage'
 import { ProtectedRoute } from '@/shared/components/ProtectedRoute'
 import { AppLayout } from '@/shared/components/AppLayout'
-
-// ─── Placeholder para fases 5.2+ ──────────────────────────────────────────────
-
-function DashboardPlaceholder() {
-  return (
-    <div className="flex flex-col gap-2">
-      <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
-      <p className="text-muted-foreground">
-        Próximamente: resumen de documentos, actividad reciente y métricas.
-      </p>
-    </div>
-  )
-}
-
-// ─── Router ───────────────────────────────────────────────────────────────────
+import { DashboardPage } from '@/features/dashboard/pages/DashboardPage'
+import { DocumentListPage } from '@/features/documents/pages/DocumentListPage'
+import { DocumentDetailPage } from '@/features/documents/pages/DocumentDetailPage'
+import { FolderBrowserPage } from '@/features/folders/pages/FolderBrowserPage'
+import { SearchPage } from '@/features/search/pages/SearchPage'
 
 export const router = createBrowserRouter([
   // Ruta pública
@@ -29,9 +19,12 @@ export const router = createBrowserRouter([
       {
         element: <AppLayout />,
         children: [
-          { path: '/', element: <DashboardPlaceholder /> },
-          // 5.2: { path: '/documents', element: <DocumentsPage /> },
-          // 5.2: { path: '/folders',   element: <FoldersPage /> },
+          { path: '/', element: <DashboardPage /> },
+          { path: '/documents', element: <DocumentListPage /> },
+          { path: '/documents/:id', element: <DocumentDetailPage /> },
+          { path: '/folders', element: <FolderBrowserPage /> },
+          { path: '/folders/:id', element: <FolderBrowserPage /> },
+          { path: '/search', element: <SearchPage /> },
           // 5.3: { path: '/workflows', element: <WorkflowsPage /> },
           // 5.3: { path: '/audit-logs', element: <AuditLogsPage /> },
         ],
