@@ -465,7 +465,7 @@ fix/{name}    ← Corrección de bugs
 
 ## 17. Estado actual del proyecto
 
-**Fase actual:** Fase 5 EN CURSO. 5.1 (Frontend setup+auth) y 5.7 (Notificaciones email) COMPLETAS; siguiente: 5.2 (Frontend gestión documental).
+**Fase actual:** Fase 5 EN CURSO. 5.1 (Frontend setup+auth) y 5.7 (Notificaciones email) COMPLETAS (incluye auditoría post-implementación 2026-06-15); siguiente: 5.2 (Frontend gestión documental).
 
 **Completado:**
 - Fase 0 — Setup: WSL2, Docker Compose (PG16+Redis7+MinIO), pre-commit hooks, .env.example
@@ -496,8 +496,9 @@ fix/{name}    ← Corrección de bugs
 - Fase 5.6 — `GET /api/v1/health/` (público, sin envelope); `health_service` (DB/Redis/MinIO); `RequestContextFilter`; Sentry gateado por `SENTRY_DSN`
 - Fase 5.1 — Frontend: Vite+React+TS+Tailwind+shadcn/ui; `api-client.ts` (Bearer + cola de refresh `isRefreshing+failedQueue`); `useAuthStore` Zustand; `LoginForm`, `ProtectedRoute`, `AppLayout`+`Sidebar`+`Header`; 22 tests Vitest
 - Fase 5.7 — `apps/notifications`: `Notification(BaseModel)` con FK org; `notification_service.notify_step_assigned`; `get_recipients_for_role`; task `send_notification` (autoretry); `workflow_service` encola via `transaction.on_commit` (lazy import); 21 tests nuevos
+- Auditoría Fase 5 (2026-06-15) — rehidratación de perfil en `ProtectedRoute`; `Promise.reject` en interceptor 401; claim atómico en `_send` de notificaciones; toasts globales via `MutationCache`; narrowing seguro de `ApiError`; tests de rollback de on_commit
 
-**Métricas (2026-06-10):** 522 tests backend (495 normales + 27 `@pytest.mark.integration`) + 22 tests frontend. Cobertura backend: 95%.
+**Métricas (2026-06-15):** ~526 tests backend (495 normales + 27 `@pytest.mark.integration` + ~4 nuevos) + 34 tests frontend. Cobertura backend: 95%.
 
 **Apps activas:** `apps.core`, `apps.organizations`, `apps.authentication`, `apps.permissions`, `apps.audit`, `apps.documents`, `apps.workflows`, `apps.search`, `apps.notifications`
 
@@ -535,6 +536,9 @@ fix/{name}    ← Corrección de bugs
 30. `apps/notifications` es app de dominio (BaseModel + FK org). `workflow_service` la importa lazy para evitar importaciones circulares.
 31. Notificaciones solo al rol exacto del paso (`required_role`). Solo en "paso asignado". Reject/cancel/complete = futuro.
 32. SMTP errors → `TransientError` → `autoretry`. Notificación `sent` no se reenvía. Fallo definitivo → `status=failed`.
+33. Rehidratación de perfil en `ProtectedRoute` usa `getMe()` imperativo (opción A, no `useMe()` hook). Motivo: el bootstrap es un flujo secuencial; un hook declarativo introduce race condition con el flag `restorationAttempted`. Skeleton cubre token + perfil antes de renderizar `<Outlet>`.
+34. Idempotencia de `_send` en notificaciones: claim atómico `UPDATE WHERE status IN (pending, failed)` + `rowcount`. Semántica at-least-once. Sin estado `processing` (evita migración + sweep task). Si se requiere exactly-once estricto → deuda técnica: introducir `processing` + sweep.
+35. Toast global de errores de mutación vía `MutationCache.onError` en `query-client.ts`. Las mutaciones con UI de error inline propia usan `meta: { suppressGlobalToast: true }`. Las queries no tienen handler global de error.
 
 **Próximo paso:** Fase 5.2 — Frontend gestión documental. Ver `docs/phase-plan.md` §5.2 para el plan detallado.
 

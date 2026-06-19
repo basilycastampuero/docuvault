@@ -1707,7 +1707,7 @@ side-effects de workflow (email al siguiente revisor). El backend está al 100% 
 notifications + health + logging; el frontend usa Vitest + Testing Library, contados aparte
 como ~40–60 tests de UI). Meta de cobertura backend: mantener ≥ 95%.
 
-**Métricas actuales (2026-06-10):** 522 tests backend + 22 tests frontend. Cobertura backend: 95%.
+**Métricas actuales (2026-06-15):** ~526 tests backend + 34 tests frontend. Cobertura backend: 95%.
 
 **Mapa de sub-fases:**
 
@@ -1886,6 +1886,50 @@ feat(frontend): add auth store, login page and protected routing
 feat(frontend): add authenticated app layout (sidebar + header)
 test(frontend): add tests for auth store and refresh interceptor
 ```
+
+#### Auditoría post-implementación (2026-06-15)
+
+Revisión completa del código de 5.1 y 5.7 antes de avanzar a 5.2. Se encontraron y
+corrigieron 5 hallazgos (1 HIGH, 4 IMPORTANT):
+
+**1. [HIGH] Rehidratación de perfil en `ProtectedRoute`** (commit `f9d4eff`)
+Al recargar la página, el bootstrap solo restauraba el `accessToken` pero no llamaba a
+`/auth/me/` → `user` permanecía `undefined` en Zustand → `Header` sin iniciales, `Sidebar`
+sin ítems con `allowedRoles`. Fix: bootstrap secuencial `refreshToken()` → `setAccessToken()`
+→ `getMe()` → `setUser()`; si `getMe()` falla → `logout()`. Skeleton cubre todo el proceso.
+Decisión cerrada #33 (ver CLAUDE.md §17).
+Tests nuevos (+5): `ProtectedRoute.test.tsx`.
+
+**2. [IMPORTANT] `Promise.reject` faltante en interceptor 401** (commit `f9d4eff`)
+Si `originalRequest` era falsy en el response interceptor, el handler podía resolver con
+`undefined` en lugar de rechazar. Fix: `return Promise.reject(parseApiError(error))`
+como fallback explícito.
+
+**3. [IMPORTANT] Doble envío concurrente en `_send` de notificaciones** (commit `cb0654d`)
+Guard `if notification.status == SENT` leía sin `select_for_update` → dos workers concurrentes
+podían ambos pasar el guard y enviar el mismo email. Fix: claim atómico
+`UPDATE WHERE status IN (pending, failed)` + comprobación de `rowcount`. Solo el worker con
+`rowcount == 1` procede al SMTP. Decisión cerrada #34 (ver CLAUDE.md §17).
+Tests nuevos (+2): `test_send_concurrent_claim_sends_once`, `test_send_failure_releases_claim_for_retry`.
+
+**4. [IMPORTANT] Mutaciones fallidas silenciosas** (commit `f9d4eff`)
+`<Toaster>` montado pero sin handler global → fallos de mutación invisibles para el usuario.
+Fix: `MutationCache({ onError })` en `query-client.ts`; `meta.suppressGlobalToast: true`
+para mutaciones con UI de error inline. Decisión cerrada #35 (ver CLAUDE.md §17).
+Tests nuevos (+2): `query-client.test.ts`.
+
+**5. [IMPORTANT] Narrowing inseguro de `ApiError` en `LoginForm`** (commit `f9d4eff`)
+Double cast `as ApiError` → si el error no era `ApiError`, accedía a `.code`/`.status`
+con resultado `undefined` silencioso. Fix: `instanceof ApiError` con import de valor.
+Tests nuevos (+5): `LoginForm.test.tsx`.
+
+**Tests de rollback de workflow → notificaciones** (commit `cb0654d`)
+Añadidos en `test_workflow_notifications.py`: `test_cancel_workflow_sends_no_notification`
+y `test_notification_not_sent_on_rollback` (verifica que `on_commit` no dispara si la
+transacción hace rollback).
+
+**Métricas tras auditoría:** frontend 22 → 34 tests Vitest (+12). Backend ~522 → ~526 (+4).
+TypeScript 0 errores. black/isort/flake8 limpios.
 
 ---
 

@@ -11,7 +11,7 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Fases 5.1 y 5.7 completas** (2026-06-10). 522 tests backend + 22 frontend.
+> Última actualización: **Auditoría de Fases 5.1 y 5.7 completa** (2026-06-15). ~526 tests backend + 34 frontend.
 > Próximo hito: Fase 5.2 (Frontend gestión documental: folder browser, document list/detail, upload, OCR badge, FTS).
 
 ---
@@ -814,7 +814,7 @@ git commit -m "feat(scope): descripción en imperativo, sin punto final"
 > capa de auditoría + workflows + búsqueda (Fase 3) y el procesamiento asíncrono con OCR
 > (Fase 4). Escrito en lenguaje llano, con las complicaciones tal como pasaron.
 
-## Mapa rápido de dónde estamos (2026-06-10)
+## Mapa rápido de dónde estamos (2026-06-15)
 
 | Fase | Qué es | Estado |
 |------|--------|--------|
@@ -831,8 +831,9 @@ git commit -m "feat(scope): descripción en imperativo, sin punto final"
 | 5.6 | Observabilidad: health check, Sentry, JSON logging (backend) | ✅ |
 | 5.1 | Frontend: scaffold React+TS+Vite + auth (login, tokens, layout) | ✅ |
 | 5.7 | Notificaciones email por workflow (nueva app `notifications`) | ✅ |
+| — | Auditoría completa de Fase 5 (5.1 + 5.7) con correcciones | ✅ |
 
-**522 tests backend + 22 tests frontend (2026-06-10). Cobertura backend: 95%.** Los tests
+**~526 tests backend + 34 tests frontend (2026-06-15). Cobertura backend: 95%.** Los tests
 backend corren contra PostgreSQL real; si fallan con "connection refused" es que falta
 `docker compose up -d`, no es un bug del código.
 
@@ -1266,6 +1267,159 @@ costo en llamadas repetidas. Nueva excepción `AIServiceUnavailable` (503) en
 `apps/core/exceptions.py`.
 
 Ver `docs/phase-plan.md` §4.3 y §4.4 para el plan completo con contratos, tests y DoD.
+
+---
+
+## 2026-06-15 — Auditoría completa de Fase 5 (5.1 + 5.7): 5 hallazgos corregidos
+
+Antes de avanzar a la Fase 5.2, se hizo una auditoría completa del código de las Fases 5.1
+(frontend auth) y 5.7 (notificaciones email). Misma metodología que la auditoría de Fase 3:
+revisar el propio trabajo buscando bugs, race conditions e inconsistencias antes de dar la
+fase por cerrada. Se encontraron 5 hallazgos (1 HIGH + 4 IMPORTANT) y se corrigieron todos.
+
+**Commits:**
+- `f9d4eff — fix(frontend): correct Promise.reject in 401 interceptor, add global error toast, fix type narrowing in auth forms`
+- `cb0654d — fix(notifications): use atomic UPDATE claim to prevent concurrent double-send`
+- `043136d — docs: compress CLAUDE.md for AI token efficiency`
+
+---
+
+### HIGH — Perfil de usuario no se rehidrataba tras silent refresh
+
+**Dónde:** `frontend/src/shared/components/ProtectedRoute.tsx`
+
+**Qué pasaba:** al recargar la página, `ProtectedRoute` restauraba el `accessToken` desde el
+refresh token del `localStorage`, pero nunca llamaba a `/auth/me/` para restaurar el objeto
+`user` en el store de Zustand. El resultado visible para el usuario:
+- El `Header` mostraba iniciales `?` en el avatar (user undefined).
+- El `Sidebar` ocultaba ítems con `allowedRoles` — incluyendo "Auditoría" para roles
+  autorizados — porque `userRole` era `undefined` y las comparaciones de rol fallaban.
+La app parecía funcionar (rutas protegidas, tokens renovados) pero el estado de sesión
+estaba incompleto.
+
+**La corrección:** bootstrap secuencial en un `useEffect`: `refreshToken()` → si éxito,
+`setAccessToken(access)` → `getMe()` → `setUser(profile)`. Si `getMe()` falla (token válido
+pero `/auth/me/` falla) → `logout()`. El skeleton de carga cubre TODO el proceso (token
++ perfil) antes de renderizar el `<Outlet>`. Casos resueltos: reload con token expirado →
+redirect a login; reload con token válido → perfil completo.
+
+**Decisión de diseño (cerrada #33):** se usa `getMe()` imperativo (opción A) en lugar de
+`useMe()` hook (opción B). El bootstrap es un flujo imperativo secuencial; un hook
+declarativo introduce una condición de carrera con el flag `restorationAttempted` que ya
+está en el estado de Zustand.
+
+**Tests nuevos:** 5 tests en `frontend/src/shared/components/__tests__/ProtectedRoute.test.tsx`:
+sin token → redirect a `/login`; refresh válido → perfil rehidratado + Outlet renderizado;
+`getMe()` falla → logout; refresh inválido → logout; token + user ya en memoria → Outlet
+directo sin llamadas de red.
+
+---
+
+### IMPORTANTE #1 — Promise.reject faltante en interceptor 401
+
+**Dónde:** `frontend/src/lib/api-client.ts`
+
+**Qué pasaba:** en el response interceptor, si el refresh tenía éxito pero `originalRequest`
+era falsy, no había un `return Promise.reject(...)` explícito — el handler podía resolver con
+`undefined`, pasando silenciosamente un error como respuesta exitosa.
+
+**La corrección:** añadido `return Promise.reject(parseApiError(error))` como fallback
+explícito cuando existe esa rama.
+
+---
+
+### IMPORTANTE #2 — Doble envío concurrente de notificaciones
+
+**Dónde:** `backend/apps/notifications/services/notification_service.py`
+
+**Qué pasaba:** el guard de idempotencia leía `notification.status` sin `select_for_update`.
+Dos workers Celery procesando la misma tarea (re-entrega de Celery, pod duplicado en prod)
+podían leer ambos `PENDING`, pasar el guard y enviar el mismo email dos veces.
+
+**La corrección:** claim atómico vía `UPDATE WHERE status IN ('pending', 'failed')`
+devolviendo `rowcount`. Solo el worker con `rowcount == 1` procede al envío SMTP; el worker
+que recibe `rowcount == 0` hace skip. No se mantiene ningún lock de DB durante el I/O externo
+(la conexión SMTP), que puede tardar segundos.
+
+**Por qué `status IN (pending, failed)` y no solo `pending`:** permite que Celery reintente
+la tarea tras un fallo SMTP definitivo — el job de reintento también puede reclamar. Si la
+notificación ya está `sent`, ningún worker la puede reclamar.
+
+**Decisión de diseño (cerrada #34):** no se introduce un estado `processing` (evitaría
+introducir una migración de enum y una sweep task para limpiar notificaciones que quedaran
+en `processing` si el worker muere a mitad del SMTP). La semántica es at-least-once, igual
+que antes; se cierra la ventana de doble envío concurrente. Si se requiere exactly-once
+estricto en el futuro → deuda técnica anotada: introducir `processing` + sweep task.
+
+**Tests nuevos (2):** `test_send_concurrent_claim_sends_once` (simula una instancia stale
+del objeto + un segundo intento concurrente: solo 1 email en `mail.outbox`) y
+`test_send_failure_releases_claim_for_retry` (fallo SMTP → `FAILED` → segundo intento
+exitoso → `SENT`).
+
+---
+
+### IMPORTANTE #3 — Mutaciones fallidas silenciosas (toasts globales)
+
+**Dónde:** `frontend/src/lib/query-client.ts`
+
+**Qué pasaba:** `<Toaster>` de sonner estaba montado en el layout pero ninguna mutación lo
+usaba. Un fallo de mutación (ej: subir un documento y recibir un 400) era invisible para
+el usuario salvo que esa mutación específica tuviera manejo de error inline.
+
+**La corrección:** `MutationCache({ onError })` global en `query-client.ts` que dispara
+`toast.error(parseApiError(e).message)` para cualquier mutación fallida. Las mutaciones con
+UI de error inline propia pueden optar por no disparar el toast global añadiendo
+`meta: { suppressGlobalToast: true }` en su definición. `useLogin` usa `suppressGlobalToast`
+porque muestra el error en el formulario.
+
+**Decisión de diseño (cerrada #35):** el `onError` global va en `MutationCache` (no en
+`defaultOptions.mutations.onError`). La diferencia: `MutationCache.onError` se ejecuta
+ADEMÁS del `onError` por-mutación; `defaultOptions.mutations.onError` lo reemplaza.
+Las queries no tienen handler global de error (demasiado ruido con refetches en background).
+
+**Tests nuevos (2):** en `frontend/src/lib/__tests__/query-client.test.ts`.
+
+---
+
+### IMPORTANTE #4 — Narrowing inseguro de ApiError en LoginForm
+
+**Dónde:** `frontend/src/features/auth/components/LoginForm.tsx`
+
+**Qué pasaba:** el código usaba un double cast `loginMutation.error as ApiError`. Si el
+error no era una instancia de `ApiError`, acceder a `.code` o `.status` devolvería
+`undefined` silenciosamente en lugar de mostrar el error real.
+
+**La corrección:** `instanceof ApiError` con `import { ApiError }` como valor (no como
+`import type`), que es lo que permite usar `instanceof` en tiempo de ejecución.
+
+**Tests nuevos (5):** en `frontend/src/features/auth/__tests__/LoginForm.test.tsx`.
+
+---
+
+### IMPORTANTE #5 — Tests de wiring workflow → notificaciones (casos de rollback)
+
+**Dónde:** `backend/apps/workflows/tests/test_workflow_notifications.py`
+
+**Qué faltaba:** no había tests que verificaran que las notificaciones NO se envían cuando
+el workflow no debería enviarlas.
+
+**Tests nuevos (2):** `test_cancel_workflow_sends_no_notification` (cancelar no envía email)
+y `test_notification_not_sent_on_rollback` (si `start_workflow` hace rollback por cualquier
+razón, el `on_commit` no dispara y no se envía ninguna notificación — porque `on_commit`
+es exactamente ese contrato: solo se ejecuta si la transacción llega a commit).
+
+---
+
+### Métricas actualizadas tras la auditoría
+
+| Métrica | Antes | Después |
+|---------|-------|---------|
+| Tests frontend (Vitest) | 22 | 34 (+12) |
+| Tests backend (pytest) | 522 | ~526 (+4) |
+| TypeScript errors | 0 | 0 |
+| black/isort/flake8 | limpio | limpio |
+
+**Cobertura backend:** 95% mantenida.
 
 ---
 
