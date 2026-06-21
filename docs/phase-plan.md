@@ -1707,15 +1707,15 @@ side-effects de workflow (email al siguiente revisor). El backend está al 100% 
 notifications + health + logging; el frontend usa Vitest + Testing Library, contados aparte
 como ~40–60 tests de UI). Meta de cobertura backend: mantener ≥ 95%.
 
-**Métricas actuales (2026-06-15):** ~526 tests backend + 34 tests frontend. Cobertura backend: 95%.
+**Métricas actuales (2026-06-21):** ~526 tests backend + 163 tests frontend. Cobertura backend: 95%.
 
 **Mapa de sub-fases:**
 
 | Sub-fase | Área | Toca backend | Toca frontend | Toca infra |
 |----------|------|:---:|:---:|:---:|
 | 5.1 | Frontend setup + auth — **COMPLETA (2026-06-10)** | — | ✅ | — |
-| 5.2 | Frontend gestión documental | — | ✅ | — |
-| 5.3 | Frontend workflows + auditoría | — | ✅ | — |
+| 5.2 | Frontend gestión documental — **COMPLETA** | — | ✅ | — |
+| 5.3 | Frontend workflows + auditoría — **COMPLETA (2026-06-21)** | — | ✅ | — |
 | 5.4 | CI/CD GitHub Actions | ✅ (config) | ✅ (build) | — |
 | 5.5 | Deploy VPS (Gunicorn+Nginx+SSL) | ✅ (settings prod) | ✅ (build estático) | ✅ |
 | 5.6 | Observabilidad (Sentry, logs, health) — **COMPLETA (backend)** | ✅ | ✅ | — |
@@ -2082,20 +2082,26 @@ Componentes shadcn/ui adicionales: `textarea`, `checkbox`, `popover`, `calendar`
 
 Ninguna nueva más allá de las de 5.1/5.2 (el date picker usa `calendar` de shadcn + date-fns).
 
-#### DoD
+#### DoD — ✅ COMPLETADO (2026-06-21)
 
-- [ ] Listar/crear/ver templates de workflow con el builder de pasos dinámico; validación
+- [x] Listar/crear/ver templates de workflow con el builder de pasos dinámico; validación
       de "exactamente un paso final" y orders consecutivos en cliente.
-- [ ] Listar ejecuciones con filtro por estado/documento; ver detalle con timeline de logs.
-- [ ] Avanzar paso (approve/reject/comment) desde la UI; el 403 por rol incorrecto se
+- [x] Listar ejecuciones con filtro por estado/documento; ver detalle con timeline de logs.
+- [x] Avanzar paso (approve/reject/comment) desde la UI; el 403 por rol incorrecto se
       muestra como toast.
-- [ ] Iniciar workflow sobre un documento desde su detalle (Editor+).
-- [ ] Consola de auditoría con tabla filtrable por acción/entidad/usuario/rango de fechas;
+- [x] Iniciar workflow sobre un documento desde su detalle (Editor+).
+- [x] Consola de auditoría con tabla filtrable por acción/entidad/usuario/rango de fechas;
       visible solo para roles autorizados.
-- [ ] (Opcional) Panel de IA: dispara análisis, hace polling y muestra el resultado; oculto
+- [x] (Opcional) Panel de IA: dispara análisis, hace polling y muestra el resultado; oculto
       si el backend responde 503.
-- [ ] Tests Vitest del `WorkflowTemplateForm` (validación de pasos) y de los filtros de
+- [x] Tests Vitest del `WorkflowTemplateForm` (validación de pasos) y de los filtros de
       auditoría.
+
+**Métricas 5.3:** 163 tests frontend (89 preexistentes + 74 nuevos en 5.3). Backend ~526 sin cambios.
+
+**Deuda conocida (no bloqueante):**
+- Páginas de lista de templates/ejecuciones muestran solo la primera página (backend soporta paginación; componente `<Pagination>` listo; aplazado).
+- Bundle ~790KB sin code-splitting; se optimiza en 5.5.
 
 #### Commits sugeridos
 

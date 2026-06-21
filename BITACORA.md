@@ -11,8 +11,8 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Auditoría de Fases 5.1 y 5.7 completa** (2026-06-15). ~526 tests backend + 34 frontend.
-> Próximo hito: Fase 5.2 (Frontend gestión documental: folder browser, document list/detail, upload, OCR badge, FTS).
+> Última actualización: **Fase 5.3 completa** (2026-06-21). ~526 tests backend + 163 frontend.
+> Próximo hito: Fase 5.4 (CI/CD GitHub Actions: lint+test+build en paralelo, coverage gate 95%).
 
 ---
 
@@ -814,7 +814,7 @@ git commit -m "feat(scope): descripción en imperativo, sin punto final"
 > capa de auditoría + workflows + búsqueda (Fase 3) y el procesamiento asíncrono con OCR
 > (Fase 4). Escrito en lenguaje llano, con las complicaciones tal como pasaron.
 
-## Mapa rápido de dónde estamos (2026-06-15)
+## Mapa rápido de dónde estamos (2026-06-21)
 
 | Fase | Qué es | Estado |
 |------|--------|--------|
@@ -832,8 +832,10 @@ git commit -m "feat(scope): descripción en imperativo, sin punto final"
 | 5.1 | Frontend: scaffold React+TS+Vite + auth (login, tokens, layout) | ✅ |
 | 5.7 | Notificaciones email por workflow (nueva app `notifications`) | ✅ |
 | — | Auditoría completa de Fase 5 (5.1 + 5.7) con correcciones | ✅ |
+| 5.2 | Frontend gestión documental: carpetas, upload, OCR badge, búsqueda | ✅ |
+| 5.3 | Frontend workflows + auditoría + panel IA opcional | ✅ |
 
-**~526 tests backend + 34 tests frontend (2026-06-15). Cobertura backend: 95%.** Los tests
+**~526 tests backend + 163 tests frontend (2026-06-21). Cobertura backend: 95%.** Los tests
 backend corren contra PostgreSQL real; si fallan con "connection refused" es que falta
 `docker compose up -d`, no es un bug del código.
 
@@ -1535,6 +1537,97 @@ Documentación actualizada:
   "redis-cli — Inspección de Redis" con el comando de instalación.
 - `backend/.env.example` — añadido `redis-tools` a la lista consolidada de dependencias
   apt del proyecto (junto a `tesseract-ocr`, `poppler-utils`, `libmagic1`).
+
+---
+
+## 2026-06-21 — Fase 5.3 completa: workflows + auditoría en el frontend
+
+La última pieza de UI que faltaba para que la plataforma sea navegable de punta a punta:
+el motor de workflows (templates, ejecuciones, avance de pasos) y la consola de auditoría.
+También el panel de análisis IA en la vista de detalle de documento.
+
+### Workflows: el builder dinámico y el diálogo de avance
+
+El formulario de creación de templates usa `useFieldArray` de react-hook-form. La idea:
+los pasos del template son un array que el usuario puede crecer o encoger con botones
+"Añadir paso" / "Eliminar". El orden se asigna automáticamente desde el índice del array,
+así el usuario no tiene que numerarlos a mano (y no puede crear huecos ni duplicados).
+
+La validación con zod replica las reglas del backend: exactamente un paso marcado como
+`is_final`, mínimo un paso. Esto da feedback inmediato antes de enviar la request, pero
+el backend sigue siendo la autoridad — si alguien mandara un request malformado
+directamente a la API, el service lo rechaza igual.
+
+Para avanzar un paso (aprobar / rechazar / comentar) se usa un `<AlertDialog>`: el
+usuario elige la acción con un select y opcionalmente agrega un comentario (el comentario
+es obligatorio solo para la acción "comentar"). La decisión de diseño más importante acá
+es que el frontend **no valida el rol del usuario antes de mostrar el botón**: simplemente
+manda la request y, si el backend responde 403 (porque ese usuario no tiene el rol del
+paso actual), muestra un toast de error. El backend es quien tiene la información de
+autoridad — el cliente podría tener datos de rol desactualizados o cacheados. Esto
+evita duplicar lógica de RBAC en el frontend y simplifica mucho el componente.
+
+El `useWorkflowExecution` usa polling de TanStack Query cada 5 segundos mientras la
+ejecución está en estado `pending` o `in_progress`. Cuando llega a un estado terminal
+(completed / rejected / cancelled) el polling se detiene solo. Mismo patrón que el
+polling del `ocr_status` en 5.2.
+
+La línea de tiempo de pasos (`WorkflowStepLogTimeline`) muestra cada acción registrada
+en orden cronológico con `formatDistanceToNow` de date-fns — "hace 3 minutos", "hace
+2 horas". Esto hace la historia del workflow legible de un vistazo.
+
+### Auditoría: consola filtrable con restricción de acceso
+
+La consola de auditoría es básicamente un `<table>` paginado con filtros server-side
+que van en los query params de la request: tipo de acción, tipo de entidad, email de
+usuario, y rangos de fecha con inputs nativos de tipo `date`. El componente `AuditLogFilters`
+construye los params y el hook los pasa directamente a `GET /api/v1/audit-logs/`.
+
+La restricción de acceso se maneja en dos capas: la ruta `/audit-logs` no aparece en
+el sidebar para roles sin permiso, y si alguien la visita directamente sin el rol correcto
+se redirige. El backend devuelve 403 igualmente — la UI solo hace UX, no seguridad.
+
+Los badges de acción están coloreados por tipo (create=verde, delete=rojo, update=amarillo)
+para que el ojo del auditor pueda escanear visualmente el listado.
+
+### Panel de análisis IA en el detalle de documento
+
+Se añadió una pestaña "Análisis IA" a `DocumentDetailPage`. Cuando el usuario presiona
+"Analizar", la UI manda `POST /documents/{id}/analyze/` y recibe un 202 (el análisis
+corre en background). A partir de ahí, la misma query de TanStack que carga el documento
+empieza a refetchear cada pocos segundos esperando que `metadata.ai_analysis` aparezca.
+
+Si el backend responde 503 (`AI_SERVICE_UNAVAILABLE` — sin key de Anthropic), la pestaña
+muestra "Análisis IA no habilitado" y oculta el botón. Si el documento no tiene contenido
+OCR (`AI_NO_CONTENT`, 409), muestra un mensaje explicativo.
+
+El patrón de polling + manejo graceful de 503/409 hace que la feature funcione bien tanto
+en el contexto del portafolio (con la key activa) como en una demo sin ella.
+
+### Nuevos componentes shadcn/ui
+
+Se añadieron `textarea`, `checkbox`, `separator` y `accordion`. El checkbox se usa en
+el `WorkflowStepEditor` para el campo `is_final`; el textarea para el comentario en
+`AdvanceStepDialog`; el separator en la línea de tiempo de pasos; el accordion para
+expandir/colapsar detalles en vistas de lista.
+
+### Métricas tras Fase 5.3
+
+| Métrica | Valor |
+|---------|-------|
+| Tests frontend (Vitest) | 163 (+74 vs 5.2; 89 preexistentes + 74 nuevos) |
+| Tests backend (pytest) | ~526 (sin cambios) |
+| TypeScript errors | 0 |
+
+**Deuda conocida anotada (no bloqueante):**
+- Las páginas de lista de templates y ejecuciones no paginan todavía — muestran solo la
+  primera página. El backend soporta paginación; el componente `<Pagination>` de 5.2
+  existe. Se aplazó para no inflar el scope de 5.3.
+- El bundle pesa ~790KB (un solo chunk). Code-splitting con lazy imports queda para 5.5
+  (deploy), donde también se optimiza el build de producción.
+
+**Próximo:** Fase 5.4 — CI/CD con GitHub Actions (lint+test+build en paralelo, PostgreSQL 16
++ Redis 7 como services del runner, coverage gate 95%, Codecov badge en README).
 
 ---
 

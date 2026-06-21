@@ -465,7 +465,7 @@ fix/{name}    ← Corrección de bugs
 
 ## 17. Estado actual del proyecto
 
-**Fase actual:** Fase 5 EN CURSO. 5.1 (Frontend setup+auth) y 5.7 (Notificaciones email) COMPLETAS (incluye auditoría post-implementación 2026-06-15); siguiente: 5.2 (Frontend gestión documental).
+**Fase actual:** Fase 5 EN CURSO. 5.1, 5.2, 5.3 y 5.7 COMPLETAS (5.3 completada 2026-06-21); siguiente: 5.4 (CI/CD GitHub Actions).
 
 **Completado:**
 - Fase 0 — Setup: WSL2, Docker Compose (PG16+Redis7+MinIO), pre-commit hooks, .env.example
@@ -497,8 +497,10 @@ fix/{name}    ← Corrección de bugs
 - Fase 5.1 — Frontend: Vite+React+TS+Tailwind+shadcn/ui; `api-client.ts` (Bearer + cola de refresh `isRefreshing+failedQueue`); `useAuthStore` Zustand; `LoginForm`, `ProtectedRoute`, `AppLayout`+`Sidebar`+`Header`; 22 tests Vitest
 - Fase 5.7 — `apps/notifications`: `Notification(BaseModel)` con FK org; `notification_service.notify_step_assigned`; `get_recipients_for_role`; task `send_notification` (autoretry); `workflow_service` encola via `transaction.on_commit` (lazy import); 21 tests nuevos
 - Auditoría Fase 5 (2026-06-15) — rehidratación de perfil en `ProtectedRoute`; `Promise.reject` en interceptor 401; claim atómico en `_send` de notificaciones; toasts globales via `MutationCache`; narrowing seguro de `ApiError`; tests de rollback de on_commit
+- Fase 5.2 — Frontend gestión documental: `FolderBrowserPage`, `DocumentListPage`, `DocumentDetailPage`, upload drag&drop con progreso, `OcrStatusBadge` con polling, `SearchPage`, `DashboardPage`; `react-dropzone`; `date-fns`
+- Fase 5.3 (2026-06-21) — Frontend workflows + auditoría: `WorkflowTemplateForm` (`useFieldArray`, validación zod), `AdvanceStepDialog` (`AlertDialog` + select acción + textarea), `ExecutionStatusBadge`, `WorkflowStepLogTimeline` (`formatDistanceToNow`); `AuditLogFilters`, `AuditLogTable`, `AuditLogPage`; `DocumentDetailPage` pestaña "Análisis IA" con polling; shadcn: `textarea`, `checkbox`, `separator`, `accordion`; rutas `/workflows`, `/workflows/templates/:id`, `/workflows/executions`, `/workflows/executions/:id`, `/audit-logs`; 74 tests Vitest nuevos
 
-**Métricas (2026-06-15):** ~526 tests backend (495 normales + 27 `@pytest.mark.integration` + ~4 nuevos) + 34 tests frontend. Cobertura backend: 95%.
+**Métricas (2026-06-21):** ~526 tests backend (495 normales + 27 `@pytest.mark.integration` + ~4 nuevos) + 163 tests frontend. Cobertura backend: 95%.
 
 **Apps activas:** `apps.core`, `apps.organizations`, `apps.authentication`, `apps.permissions`, `apps.audit`, `apps.documents`, `apps.workflows`, `apps.search`, `apps.notifications`
 
@@ -539,8 +541,11 @@ fix/{name}    ← Corrección de bugs
 33. Rehidratación de perfil en `ProtectedRoute` usa `getMe()` imperativo (opción A, no `useMe()` hook). Motivo: el bootstrap es un flujo secuencial; un hook declarativo introduce race condition con el flag `restorationAttempted`. Skeleton cubre token + perfil antes de renderizar `<Outlet>`.
 34. Idempotencia de `_send` en notificaciones: claim atómico `UPDATE WHERE status IN (pending, failed)` + `rowcount`. Semántica at-least-once. Sin estado `processing` (evita migración + sweep task). Si se requiere exactly-once estricto → deuda técnica: introducir `processing` + sweep.
 35. Toast global de errores de mutación vía `MutationCache.onError` en `query-client.ts`. Las mutaciones con UI de error inline propia usan `meta: { suppressGlobalToast: true }`. Las queries no tienen handler global de error.
+36. `AdvanceStepDialog` (frontend, 5.3): el cliente no valida el rol del usuario antes de mostrar el botón de avance — manda la request y muestra el 403 del backend como toast. El backend es la autoridad de RBAC; la UI nunca duplica esa lógica.
+37. Polling de `useWorkflowExecution` cada 5s mientras `status in (pending, in_progress)`; se detiene al llegar a estado terminal. Mismo patrón que `ocr_status` en 5.2. Sin websockets (over-engineering para portafolio).
+38. Paginación en listas de workflows (templates/executions) aplazada: las páginas de lista muestran solo la primera página. El componente `<Pagination>` y el soporte de backend ya existen; pendiente de conectar. Deuda anotada para 5.4/5.5.
 
-**Próximo paso:** Fase 5.2 — Frontend gestión documental. Ver `docs/phase-plan.md` §5.2 para el plan detallado.
+**Próximo paso:** Fase 5.4 — CI/CD GitHub Actions. Ver `docs/phase-plan.md` §5.4 para el plan detallado.
 
 ## 18. Cómo correr el proyecto localmente
 
