@@ -22,14 +22,15 @@ export function useDocuments(params: ListDocumentsParams = {}) {
   })
 }
 
-export function useDocument(id: string) {
+export function useDocument(id: string, pollForAi = false) {
   return useQuery({
     queryKey: documentKeys.detail(id),
     queryFn: () => documentsApi.getById(id),
     enabled: !!id,
     refetchInterval: (query) => {
-      const status = query.state.data?.ocr_status
-      if (status === 'pending' || status === 'processing') return 3000
+      const ocrStatus = query.state.data?.ocr_status
+      if (ocrStatus === 'pending' || ocrStatus === 'processing') return 3000
+      if (pollForAi && !query.state.data?.metadata?.ai_analysis) return 3000
       return false
     },
   })
@@ -131,5 +132,17 @@ export function useReprocessOcr() {
     onSuccess: (_data, id) => {
       queryClient.invalidateQueries({ queryKey: documentKeys.detail(id) })
     },
+  })
+}
+
+export function useRequestAiAnalysis() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (id: string) => documentsApi.requestAiAnalysis(id),
+    onSuccess: (_data, id) => {
+      queryClient.invalidateQueries({ queryKey: documentKeys.detail(id) })
+    },
+    meta: { suppressGlobalToast: true },
   })
 }

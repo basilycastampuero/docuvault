@@ -125,4 +125,8 @@ export const documentsApi = {
   reprocessOcr: async (id: string): Promise<void> => {
     await apiClient.post(`/documents/${id}/reprocess-ocr/`)
   },
+
+  requestAiAnalysis: async (id: string): Promise<void> => {
+    await apiClient.post(`/documents/${id}/analyze/`)
+  },
 }

@@ -1,5 +1,6 @@
+import { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { ArrowLeft, Download, RefreshCw, Loader2, Folder } from 'lucide-react'
+import { ArrowLeft, Download, RefreshCw, Loader2, Folder, BrainCircuit } from 'lucide-react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { Button } from '@/components/ui/button'
@@ -16,7 +17,99 @@ import { useAuthStore } from '@/features/auth/store'
 import { OcrStatusBadge } from '../components/OcrStatusBadge'
 import { DocumentVersionList } from '../components/DocumentVersionList'
 import { DocumentMetadataForm } from '../components/DocumentMetadataForm'
-import { useDocument, useDownloadDocument, useReprocessOcr } from '../hooks'
+import { useDocument, useDownloadDocument, useReprocessOcr, useRequestAiAnalysis } from '../hooks'
+
+interface AiAnalysis {
+  summary?: string
+  entities?: string[]
+  suggested_category?: string
+}
+
+interface AiAnalysisPanelProps {
+  document: {
+    ocr_status: string
+    metadata: Record<string, unknown>
+  }
+  isPending: boolean
+  onRequest: () => void
+  onAnalysisReady: () => void
+}
+
+function AiAnalysisPanel({ document, isPending, onRequest, onAnalysisReady }: AiAnalysisPanelProps) {
+  const analysis = document.metadata?.ai_analysis as AiAnalysis | undefined
+
+  useEffect(() => {
+    if (analysis) onAnalysisReady()
+  }, [analysis, onAnalysisReady])
+
+  if (analysis) {
+    return (
+      <div className="space-y-4">
+        {analysis.summary && (
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">
+              Resumen
+            </p>
+            <p className="text-sm">{analysis.summary}</p>
+          </div>
+        )}
+        {analysis.suggested_category && (
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">
+              Categoría sugerida
+            </p>
+            <Badge variant="outline">{analysis.suggested_category}</Badge>
+          </div>
+        )}
+        {analysis.entities && analysis.entities.length > 0 && (
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">
+              Entidades detectadas
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {analysis.entities.map((entity) => (
+                <Badge key={entity} variant="secondary" className="text-xs">
+                  {entity}
+                </Badge>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  if (document.ocr_status !== 'completed') {
+    return (
+      <p className="text-sm text-muted-foreground">
+        El análisis IA requiere que el OCR esté completado. Estado actual del OCR:{' '}
+        <span className="font-medium">{document.ocr_status}</span>.
+      </p>
+    )
+  }
+
+  if (isPending) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Procesando análisis IA...
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-muted-foreground">
+        El documento está listo para ser analizado por IA. El análisis extrae un resumen,
+        entidades clave y sugiere una categoría.
+      </p>
+      <Button size="sm" onClick={onRequest}>
+        <BrainCircuit className="mr-2 h-4 w-4" />
+        Solicitar análisis
+      </Button>
+    </div>
+  )
+}
 
 const STATUS_LABELS: Record<string, string> = {
   draft: 'Borrador',
@@ -47,10 +140,13 @@ export function DocumentDetailPage() {
   const navigate = useNavigate()
   const role = useAuthStore((s) => s.user?.role)
   const canWrite = role ? WRITE_ROLES.includes(role) : false
+  const [aiUnavailable, setAiUnavailable] = useState(false)
+  const [pollForAi, setPollForAi] = useState(false)
 
-  const { data: document, isLoading, error } = useDocument(id ?? '')
+  const { data: document, isLoading, error } = useDocument(id ?? '', pollForAi)
   const download = useDownloadDocument()
   const reprocessOcr = useReprocessOcr()
+  const requestAiAnalysis = useRequestAiAnalysis()
 
   if (!id) {
     navigate('/documents')
@@ -145,6 +241,12 @@ export function DocumentDetailPage() {
               {document.ocr_content && (
                 <TabsTrigger value="ocr">Contenido OCR</TabsTrigger>
               )}
+              {!aiUnavailable && (
+                <TabsTrigger value="ai">
+                  <BrainCircuit className="mr-1.5 h-3.5 w-3.5" />
+                  Análisis IA
+                </TabsTrigger>
+              )}
             </TabsList>
 
             <TabsContent value="versions" className="mt-4">
@@ -178,6 +280,39 @@ export function DocumentDetailPage() {
                     <pre className="text-sm whitespace-pre-wrap break-words text-muted-foreground font-sans">
                       {document.ocr_content}
                     </pre>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            )}
+
+            {!aiUnavailable && (
+              <TabsContent value="ai" className="mt-4">
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">Análisis IA</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <AiAnalysisPanel
+                      document={document}
+                      isPending={requestAiAnalysis.isPending || pollForAi}
+                      onRequest={() => {
+                        requestAiAnalysis.mutate(document.id, {
+                          onSuccess: () => {
+                            setPollForAi(true)
+                          },
+                          onError: (err) => {
+                            if (
+                              err instanceof Error &&
+                              'code' in err &&
+                              (err as { code: string }).code === 'AI_SERVICE_UNAVAILABLE'
+                            ) {
+                              setAiUnavailable(true)
+                            }
+                          },
+                        })
+                      }}
+                      onAnalysisReady={() => setPollForAi(false)}
+                    />
                   </CardContent>
                 </Card>
               </TabsContent>
@@ -263,19 +398,6 @@ export function DocumentDetailPage() {
               </CardHeader>
               <CardContent>
                 <p className="text-sm text-muted-foreground">{document.description}</p>
-              </CardContent>
-            </Card>
-          )}
-
-          {!!document.metadata?.ai_analysis && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Análisis IA</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <pre className="text-xs whitespace-pre-wrap text-muted-foreground font-sans">
-                  {String(JSON.stringify(document.metadata.ai_analysis, null, 2))}
-                </pre>
               </CardContent>
             </Card>
           )}

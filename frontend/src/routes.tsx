@@ -7,6 +7,11 @@ import { DocumentListPage } from '@/features/documents/pages/DocumentListPage'
 import { DocumentDetailPage } from '@/features/documents/pages/DocumentDetailPage'
 import { FolderBrowserPage } from '@/features/folders/pages/FolderBrowserPage'
 import { SearchPage } from '@/features/search/pages/SearchPage'
+import { WorkflowTemplatesPage } from '@/features/workflows/pages/WorkflowTemplatesPage'
+import { WorkflowTemplateDetailPage } from '@/features/workflows/pages/WorkflowTemplateDetailPage'
+import { WorkflowExecutionsPage } from '@/features/workflows/pages/WorkflowExecutionsPage'
+import { WorkflowExecutionDetailPage } from '@/features/workflows/pages/WorkflowExecutionDetailPage'
+import { AuditLogPage } from '@/features/audit/pages/AuditLogPage'
 
 export const router = createBrowserRouter([
   // Ruta pública
@@ -25,8 +30,11 @@ export const router = createBrowserRouter([
           { path: '/folders', element: <FolderBrowserPage /> },
           { path: '/folders/:id', element: <FolderBrowserPage /> },
           { path: '/search', element: <SearchPage /> },
-          // 5.3: { path: '/workflows', element: <WorkflowsPage /> },
-          // 5.3: { path: '/audit-logs', element: <AuditLogsPage /> },
+          { path: '/workflows', element: <WorkflowTemplatesPage /> },
+          { path: '/workflows/templates/:id', element: <WorkflowTemplateDetailPage /> },
+          { path: '/workflows/executions', element: <WorkflowExecutionsPage /> },
+          { path: '/workflows/executions/:id', element: <WorkflowExecutionDetailPage /> },
+          { path: '/audit-logs', element: <AuditLogPage /> },
         ],
       },
     ],

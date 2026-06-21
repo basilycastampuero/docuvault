@@ -118,3 +118,78 @@ export interface UserProfile {
   organization_name: string
   is_active: boolean
 }
+
+// ─── Workflow domain types ──────────────────────────────────────────────────────
+
+export type WorkflowStatus = 'pending' | 'in_progress' | 'completed' | 'rejected' | 'cancelled'
+export type WorkflowStepAction = 'approved' | 'rejected' | 'commented'
+
+export interface WorkflowStep {
+  id: string
+  name: string
+  order: number
+  required_role: UserRole
+  is_final: boolean
+  actions: Record<string, unknown>
+}
+
+export interface WorkflowTemplate {
+  id: string
+  name: string
+  description: string
+  is_active: boolean
+  config: Record<string, unknown>
+  steps: WorkflowStep[]
+  organization: string
+  created_at: string
+  updated_at: string
+}
+
+export interface WorkflowExecution {
+  id: string
+  template: { id: string; name: string }
+  document: { id: string; name: string }
+  current_step: WorkflowStep | null
+  status: WorkflowStatus
+  started_by: { id: string; email: string }
+  started_at: string | null
+  completed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface WorkflowStepLog {
+  id: string
+  step: { id: string; name: string; order: number }
+  action: WorkflowStepAction
+  performed_by: { id: string; email: string }
+  comment: string
+  created_at: string
+}
+
+// ─── Audit domain types ─────────────────────────────────────────────────────────
+
+export type AuditAction =
+  | 'create'
+  | 'update'
+  | 'delete'
+  | 'view'
+  | 'download'
+  | 'login'
+  | 'logout'
+  | 'restore'
+  | 'status_change'
+
+export interface AuditLog {
+  id: number
+  user: { id: string; email: string } | null
+  entity_type: string
+  entity_id: string
+  action: AuditAction
+  old_values: Record<string, unknown>
+  new_values: Record<string, unknown>
+  ip_address: string | null
+  user_agent: string
+  metadata: Record<string, unknown>
+  created_at: string
+}
