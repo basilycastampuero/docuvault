@@ -364,8 +364,8 @@ export function DocumentDetailPage() {
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Creado por</span>
-                <span className="font-medium truncate max-w-32" title={document.created_by.email}>
-                  {document.created_by.email}
+                <span className="font-medium truncate max-w-32" title={document.created_by_email}>
+                  {document.created_by_email}
                 </span>
               </div>
               <div className="flex justify-between">

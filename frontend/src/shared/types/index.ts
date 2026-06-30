@@ -62,7 +62,7 @@ export interface Folder {
   id: string
   name: string
   parent: string | null
-  owner: { id: string; email: string }
+  owner_email: string
   created_at: string
   updated_at: string
 }
@@ -74,15 +74,14 @@ export interface Document {
   mime_type: string
   file_size: number
   checksum: string
-  storage_path: string
   status: DocumentStatus
   version: number
   ocr_status: OcrStatus
-  ocr_content: string
   tags: string[]
   metadata: Record<string, unknown>
-  folder: { id: string; name: string } | null
-  created_by: { id: string; email: string }
+  folder: string | null
+  folder_name: string | null
+  created_by_email: string
   created_at: string
   updated_at: string
 }
@@ -93,7 +92,7 @@ export interface DocumentVersion {
   file_size: number
   mime_type: string
   checksum: string
-  created_by: { id: string; email: string }
+  created_by_email: string
   change_description: string
   created_at: string
 }

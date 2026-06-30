@@ -146,7 +146,7 @@ export function DocumentVersionList({ document }: DocumentVersionListProps) {
                     )}
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
-                    {version.created_by.email}
+                    {version.created_by_email}
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     <div className="flex items-center gap-1">
