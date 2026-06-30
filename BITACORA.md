@@ -11,8 +11,150 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Fase 5.3 completa** (2026-06-21). ~526 tests backend + 163 frontend.
+> Última actualización: **Post-auditoría Fase 5.3** (2026-06-29). ~528 tests backend (2 nuevos, pendientes de correr) + 164 frontend.
 > Próximo hito: Fase 5.4 (CI/CD GitHub Actions: lint+test+build en paralelo, coverage gate 95%).
+
+---
+
+## 2026-06-29 — Post-auditoría Fase 5.3: 6 hallazgos corregidos
+
+Después de completar la Fase 5.3 (frontend de workflows, auditoría y análisis IA), se realizó
+una sesión de revisión del código producido buscando bugs, inconsistencias y edge cases antes
+de avanzar a la Fase 5.4. Se encontraron 6 hallazgos (3 Medio + 3 Menor) y se corrigieron todos
+en la misma sesión.
+
+---
+
+### MEDIO #1 — Filtro de auditoría enviaba email pero el backend esperaba UUID
+
+**Dónde:** `frontend/src/features/audit/components/AuditLogFilters.tsx`, `backend/apps/audit/api/filters.py`
+
+**Qué pasaba:** `AuditLogFilters.tsx` enviaba el email del usuario como query param `user`, pero
+`AuditLogFilter` en el backend declaraba ese campo como `UUIDFilter(field_name="user_id")`. Un
+email no es un UUID válido: `django-filter` descartaba el valor silenciosamente → la tabla
+aparecía vacía sin ningún mensaje de error al usuario.
+
+**La corrección:** se añadió `user_email = CharFilter(field_name="user__email", lookup_expr="iexact")`
+al `AuditLogFilter` del backend. En el frontend se renombró el campo `user` → `user_email`
+en el formulario, la llamada a la API y los hooks.
+
+**Archivos:** `backend/apps/audit/api/filters.py`, `frontend/src/features/audit/components/AuditLogFilters.tsx`, `frontend/src/features/audit/api.ts`
+
+---
+
+### MEDIO #2 — Filtro "Hasta" excluía todos los eventos del día seleccionado
+
+**Dónde:** `frontend/src/features/audit/components/AuditLogFilters.tsx`
+
+**Qué pasaba:** `new Date("2026-06-29").toISOString()` produce `"2026-06-29T00:00:00.000Z"`.
+Con `lookup_expr="lte"` sobre `created_at`, el filtro solo devolvía registros hasta medianoche
+UTC del día seleccionado → prácticamente ningún evento del propio día aparecía. El problema
+se amplificaba para usuarios en zonas horarias fuera de UTC, produciendo un corrimiento de
+día completo.
+
+**La corrección:** para `created_before` se aplica `endOfDay(parseISO(value)).toISOString()`
+de `date-fns` (ya instalado en el proyecto) antes de serializar el valor. `created_after` queda
+sin cambios: empezar desde el inicio del día es el comportamiento esperado.
+
+**Archivos:** `frontend/src/features/audit/components/AuditLogFilters.tsx`
+
+---
+
+### MEDIO #3 — Polling del análisis IA no terminaba si la tarea Celery fallaba definitivamente
+
+**Dónde:** `backend/apps/documents/tasks/document_tasks.py`, `frontend/src/features/documents/hooks.ts`, `frontend/src/features/documents/pages/DocumentDetailPage.tsx`
+
+**Qué pasaba:** al solicitar análisis, `setPollForAi(true)` iniciaba un refetch de TanStack
+Query cada 3 segundos mientras `pollForAi && !metadata?.ai_analysis`. Si la tarea Celery agotaba
+sus reintentos y fallaba permanentemente, el backend nunca escribía nada en `metadata` → la
+condición de parada nunca se cumplía → spinner eterno y requests infinitos mientras el tab
+permaneciera abierto.
+
+**La corrección (backend):** se escribe un marcador de fallo en el handler de error de
+`analyze_document` antes de re-lanzar la excepción: `metadata["ai_analysis"] = {"status": "failed", "error": "..."}`.
+Se extrajo el helper `_write_ai_failure_marker(document, document_id)` para mantener la
+función principal legible.
+
+**La corrección (frontend):** la condición de polling ahora para cuando `aiAnalysis` existe,
+sea éxito o fallo. En `DocumentDetailPage.tsx` se detecta `status === 'failed'` y se muestra
+el error con un botón "Reintentar". El polling se reactiva si el usuario reintenta y hay una
+nueva tarea en curso.
+
+**Archivos:** `backend/apps/documents/tasks/document_tasks.py`, `frontend/src/features/documents/hooks.ts`, `frontend/src/features/documents/pages/DocumentDetailPage.tsx`
+
+---
+
+### MENOR #4 — `WorkflowStepLogTimeline` reventaba ante una acción desconocida
+
+**Dónde:** `frontend/src/features/workflows/components/WorkflowStepLogTimeline.tsx`
+
+**Qué pasaba:** `ACTION_CONFIG[log.action]` sin fallback: si el backend introduce en el futuro
+un nuevo valor de `action`, `config` es `undefined` y el intento de acceder a sus propiedades
+tumba toda la línea de tiempo. `AuditLogTable.tsx` ya tenía este fallback desde 5.3;
+`WorkflowStepLogTimeline.tsx` no lo tenía.
+
+**La corrección:** añadido fallback explícito `?? { label: action, Icon: Circle, className: 'text-gray-500 bg-gray-50' }`.
+
+**Archivos:** `frontend/src/features/workflows/components/WorkflowStepLogTimeline.tsx`
+
+---
+
+### MENOR #5 — `WorkflowTemplateForm` podía entrar en loop de reset
+
+**Dónde:** `frontend/src/features/workflows/components/WorkflowTemplateForm.tsx`
+
+**Qué pasaba:** el `useEffect` que llama `form.reset(defaultValues)` tenía `defaultValues`
+(prop) como dependencia. Si un componente padre futuro pasara un objeto inline
+`defaultValues={{ ... }}`, la referencia cambiaría en cada render del padre → `form.reset`
+en cada render → pérdida del input del usuario mientras escribe.
+
+**La corrección:** estabilizado con `useRef(defaultValues)` para capturar el valor inicial
+una sola vez y no reaccionar a cambios de referencia subsiguientes.
+
+**Archivos:** `frontend/src/features/workflows/components/WorkflowTemplateForm.tsx`
+
+---
+
+### MENOR #6 — La query de auditoría se disparaba aunque el usuario no tuviera el rol
+
+**Dónde:** `frontend/src/features/audit/hooks.ts`, `frontend/src/features/audit/pages/AuditLogPage.tsx`
+
+**Qué pasaba:** `useAuditLogs` se ejecutaba incondicionalmente antes del chequeo de rol.
+El backend devolvía 403 sin fuga de datos, pero era un request innecesario. Con TanStack
+Query retrying automáticamente, podía generar varios 403 consecutivos antes de detenerse.
+
+**La corrección:** `useAuditLogs` acepta `options?: { enabled?: boolean }` y pasa el flag
+a TanStack Query. En `AuditLogPage` se pasa `enabled: !!role && ALLOWED_ROLES.includes(role)`.
+
+**Archivos:** `frontend/src/features/audit/hooks.ts`, `frontend/src/features/audit/pages/AuditLogPage.tsx`
+
+---
+
+### Métricas post-auditoría
+
+| Métrica | Antes | Después |
+|---------|-------|---------|
+| Tests frontend (Vitest) | 163 | 164 (+1 nuevo) |
+| Tests backend (pytest) | ~526 | ~528 (+2 nuevos, pendientes de correr) |
+| TypeScript errors | 0 | 0 |
+| black/isort/flake8 | limpio | limpio |
+
+Los 2 tests backend nuevos están en `test_audit_api.py` (filtro por `user_email`) y
+`test_document_tasks.py` (verificación del marcador de fallo en `metadata["ai_analysis"]`).
+Los tests backend no se ejecutaron en esta sesión (PostgreSQL apagado); quedan pendientes
+de correr en la próxima sesión con la infra activa.
+
+**Cobertura backend:** 95% esperada (sin variación por estos cambios).
+
+---
+
+### Nota de deuda técnica
+
+Cuando el usuario presiona "Reintentar" después de un fallo del análisis IA, el marcador
+de fallo anterior permanece visible durante 1-2 ciclos de polling hasta que el backend
+sobreescriba `metadata["ai_analysis"]` con el resultado de la nueva tarea. Para una UX
+más limpia, el endpoint `POST /documents/{id}/analyze/` podría limpiar el campo al recibir
+la request — aplazado para no añadir complejidad innecesaria en esta fase.
 
 ---
 
