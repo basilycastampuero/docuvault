@@ -38,8 +38,10 @@ export function ProtectedRoute() {
     // Bootstrap secuencial: 1) refrescar token, 2) rehidratar perfil.
     setIsRestoring(true)
     refreshToken(storedRefresh)
-      .then(async ({ access }) => {
+      .then(async ({ access, refresh: newRefresh }) => {
         setAccessToken(access)
+        // Persistir el refresh token rotado (BLACKLIST_AFTER_ROTATION=True)
+        localStorage.setItem('refreshToken', newRefresh)
         // El interceptor de request lee el token del store en getMe().
         const profile = await getMe()
         setUser(profile)

@@ -46,7 +46,7 @@ const MOCK_USER: UserProfile = {
   is_active: true,
 }
 
-const REFRESH_RESPONSE = { access: 'new-access-token' }
+const REFRESH_RESPONSE = { data: { access: 'new-access-token', refresh: 'new-refresh-token' }, meta: {} }
 
 const ME_RESPONSE = { data: MOCK_USER, meta: {} }
 

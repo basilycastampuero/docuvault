@@ -139,7 +139,7 @@ describe('Response interceptor — refresh flow', () => {
       }),
       http.post('http://localhost:8000/api/v1/auth/refresh/', () => {
         refreshCallCount++
-        return HttpResponse.json({ access: 'new-access-token' })
+        return HttpResponse.json({ data: { access: 'new-access-token', refresh: 'new-refresh-token' }, meta: {} })
       }),
     )
 
@@ -164,7 +164,7 @@ describe('Response interceptor — refresh flow', () => {
         return HttpResponse.json(DOCUMENTS_RESPONSE)
       }),
       http.post('http://localhost:8000/api/v1/auth/refresh/', () => {
-        return HttpResponse.json({ access: 'freshly-issued-token' })
+        return HttpResponse.json({ data: { access: 'freshly-issued-token', refresh: 'new-refresh-token' }, meta: {} })
       }),
     )
 
@@ -216,7 +216,7 @@ describe('Response interceptor — refresh flow', () => {
       }),
       http.post('http://localhost:8000/api/v1/auth/refresh/', () => {
         refreshCalled = true
-        return HttpResponse.json({ access: 'should-not-reach-here' })
+        return HttpResponse.json({ data: { access: 'should-not-reach-here', refresh: 'new-refresh' }, meta: {} })
       }),
     )
 
@@ -267,7 +267,7 @@ describe('Response interceptor — refresh flow', () => {
         // Simulate a small network delay so the queue fills before the
         // first refresh resolves and the queuing logic gets exercised
         await new Promise<void>((r) => setTimeout(r, 20))
-        return HttpResponse.json({ access: 'shared-new-token' })
+        return HttpResponse.json({ data: { access: 'shared-new-token', refresh: 'new-refresh-token' }, meta: {} })
       }),
     )
 
@@ -319,7 +319,7 @@ describe('Response interceptor — refresh flow', () => {
       }),
       http.post('http://localhost:8000/api/v1/auth/refresh/', async () => {
         await new Promise<void>((r) => setTimeout(r, 20))
-        return HttpResponse.json({ access: 'brand-new-token' })
+        return HttpResponse.json({ data: { access: 'brand-new-token', refresh: 'new-refresh-token' }, meta: {} })
       }),
     )
 
