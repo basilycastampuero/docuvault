@@ -11,8 +11,381 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Fase 5.5 completada** (2026-06-29). ~528 tests backend + 164 frontend.
+> Última actualización: **Sesión de testing local: type mismatch WorkflowExecution + DocumentDetailPage** (2026-06-30). 169 tests frontend. Rama `feature/5.2-frontend-documents`.
 > Proyecto de portafolio completado (Fases 0–5). Fase 6 = mejoras post-portafolio.
+
+---
+
+## 2026-06-30 — Sesión de testing local: type mismatch en workflows y documentos (commit 1aa4f04)
+
+Sesión de prueba manual del frontend contra el backend real. Se detectaron y corrigieron 2 bugs
+de tipos TypeScript y se añadieron 5 tests de regresión.
+
+**Bug A — WorkflowExecution: crash al acceder a campos de objetos anidados.**
+Los tipos `WorkflowExecution` y `WorkflowStepLog` en `shared/types/index.ts` declaraban
+objetos anidados (`template: { id, name }`, `started_by: { id, email }`, `step: { id, name, order }`, etc.)
+pero el API devuelve campos planos con sufijo (`template_name`, `started_by_email`, `step_name`,
+`step_order`, `performed_by_email`). Afectó a `WorkflowExecutionsPage`, `WorkflowExecutionDetailPage`
+y `WorkflowStepLogTimeline`. Fix: actualizar tipos + todos los accesos en los tres componentes.
+
+**Bug B — DocumentDetailPage: crash en panel de carpeta + pestaña OCR muerta.**
+El tipo `Document` declaraba `folder: { id, name }` pero el API devuelve UUID string + `folder_name`
+separado → crash `Cannot read properties of undefined (reading 'id')` al abrir cualquier documento
+con carpeta. Además, la pestaña "Contenido OCR" nunca se renderizaba: `ocr_content` no existe en
+el serializer del backend. Fix: `document.folder.id` → `document.folder`, `document.folder.name` →
+`document.folder_name`; eliminada la pestaña OCR muerta.
+
+**Tests de regresión añadidos (5 tests, todos verdes):**
+- `WorkflowTemplateForm.regression.test.tsx` — montaje sin crash cuando `<label>` sustituye `<FormLabel>` fuera de `<FormField>`
+- `DocumentDetailPage.test.tsx` (2) — montaje sin crash + campo plano `created_by_email`
+- `DocumentVersionList.test.tsx` (2) — mismo patrón para `version.created_by_email`
+
+Suite total: **169/169 tests frontend** en verde.
+
+---
+
+## 2026-06-30 — Corrección de 3 bugs críticos en la capa de autenticación frontend
+
+Durante una sesión de prueba local del flujo de login se detectó que el frontend se quedaba
+bloqueado en la pantalla de login a pesar de que el backend respondía correctamente. Los logs
+del backend mostraban el patrón:
+
+```
+POST /api/v1/auth/login/ → 200
+GET  /api/v1/auth/me/    → 401
+POST /api/v1/auth/refresh/ → 400
+```
+
+Se realizó un code review completo de la capa de comunicación frontend↔backend (APIs, hooks,
+interceptores, manejo de tokens). Se encontraron **3 bugs críticos** de la misma raíz y 2 medios
++ 3 menores que ya estaban correctos.
+
+---
+
+### Causa raíz común
+
+El endpoint `/api/v1/auth/refresh/` (como todos los endpoints del proyecto) devuelve el payload
+envuelto en el envelope estándar `{data: {access, refresh}, meta: {}}`. Solo `getMe()` y
+`login()` (este último ya corregido en la sesión anterior) usaban el helper `unwrap()`. Todos
+los demás puntos de consumo del endpoint de refresh usaban `response.data` crudo, recibiendo el
+envelope completo en lugar del payload, con lo que `access` resultaba `undefined`.
+
+---
+
+### Bug crítico 1 — `api.ts` — `refreshToken()` no desenvolvía el envelope
+
+**Síntoma:** La sesión nunca se restauraba tras una recarga de página. El bootstrap de
+`ProtectedRoute` fallaba silenciosamente: llamaba a `refreshToken()`, recibía `undefined` como
+`access` y abortaba el flujo.
+
+**Código roto:**
+```typescript
+const response = await apiClient.post<RefreshResponse>('/auth/refresh/', { refresh })
+return response.data  // devolvía {data: {...}, meta: {}} en vez de {access, refresh}
+```
+
+**Fix:** tipar la respuesta como `Envelope<RefreshResponse>` y pasar por `unwrap()`:
+```typescript
+const response = await apiClient.post<Envelope<RefreshResponse>>('/auth/refresh/', { refresh })
+return unwrap(response)
+```
+
+---
+
+### Bug crítico 2 — `api-client.ts` — Interceptor de 401 no desenvolvía el envelope
+
+**Síntoma:** Cualquier request cuyo access token expirara durante la sesión (sin recarga de
+página) entraba en un bucle de 401: el interceptor hacía el refresh silencioso, recibía
+`envelope.data.access` como `undefined`, actualizaba el store con `undefined`, la request
+reintentada volvía a fallar con 401, hasta que el flag `_retry` cortaba el ciclo y se
+ejecutaba el logout.
+
+**Código roto:**
+```typescript
+const { data } = await axios.post<{ access: string }>(`${baseURL}/auth/refresh/`, { refresh: refreshToken })
+const newAccess = data.access  // undefined — data era el envelope completo
+```
+
+**Fix:** tipar correctamente y navegar hasta el payload interno:
+```typescript
+const { data: envelope } = await axios.post<{
+  data: { access: string; refresh: string }
+}>(`${baseURL}/auth/refresh/`, { refresh: refreshToken })
+const newAccess = envelope.data.access
+const newRefresh = envelope.data.refresh
+useAuthStore.getState().setAccessToken(newAccess)
+if (newRefresh) localStorage.setItem('refreshToken', newRefresh)
+```
+
+---
+
+### Bug crítico 3 — Refresh token rotado nunca persistido
+
+**Contexto:** El backend tiene `ROTATE_REFRESH_TOKENS=True` + `BLACKLIST_AFTER_ROTATION=True`
+(SimpleJWT). Cada respuesta de `/auth/refresh/` incluye un **nuevo** refresh token y blacklistea
+el anterior.
+
+**Síntoma:** Los primeros 60 minutos (ventana del access token en dev) todo funcionaba. Pasado
+ese tiempo, el interceptor intentaba usar el refresh token original (ya blacklisteado) → el
+backend devolvía 400/401 → logout involuntario. Imposible de reproducir en sesiones cortas; se
+manifestaba solo en uso prolongado.
+
+**Archivos afectados y fix:**
+
+- `api-client.ts` — ya corregido como parte del Bug 2: el interceptor ahora persiste
+  `envelope.data.refresh` en `localStorage`.
+- `ProtectedRoute.tsx` — el bootstrap de sesión tampoco guardaba el nuevo refresh:
+  ```typescript
+  // ANTES
+  refreshToken(storedRefresh).then(async ({ access }) => {
+      setAccessToken(access)
+      // ← el nuevo refresh token se descartaba silenciosamente
+
+  // DESPUÉS
+  refreshToken(storedRefresh).then(async ({ access, refresh: newRefresh }) => {
+      setAccessToken(access)
+      localStorage.setItem('refreshToken', newRefresh)
+  ```
+- `types.ts` — `RefreshResponse` solo tenía `access: string`. Se añadió `refresh: string`.
+
+---
+
+### Tests actualizados
+
+Los fixtures MSW en la suite de tests mockeaban `/auth/refresh/` con el formato plano
+`{ access: '...' }` (sin envelope), lo que hacía que los tests pasaran aunque el código de
+producción estuviera roto frente al backend real. Se actualizaron al formato envelope correcto:
+
+- `frontend/src/features/auth/__tests__/interceptor.test.ts` — 5 handlers de
+  `http.post('/auth/refresh/')`.
+- `frontend/src/shared/components/__tests__/ProtectedRoute.test.tsx` — fixture
+  `REFRESH_RESPONSE`.
+
+**Resultado:** 164/164 tests frontend pasando. `tsc --noEmit` sin errores.
+
+---
+
+### Lo que el reviewer confirmó como ya correcto
+
+- Cola de refresh (`isRefreshing + failedQueue`): N requests con 401 simultáneos →
+  exactamente 1 refresh, el resto espera en cola y se reintenta con el nuevo token.
+- `parseApiError`: maneja status 0 (red error), 4xx y 5xx correctamente.
+- Logout: best-effort; la sesión local se limpia siempre, independientemente de si el
+  backend acepta el token de blacklist.
+- `CORS_ALLOW_ALL_ORIGINS=True` en dev: intencional y documentado.
+- Endpoints de documents, workflows y audit: todos usan `unwrap()` correctamente.
+
+---
+
+### Archivos modificados
+
+| Archivo | Cambio |
+|---------|--------|
+| `frontend/src/features/auth/types.ts` | `RefreshResponse` añade campo `refresh: string` |
+| `frontend/src/features/auth/api.ts` | `refreshToken()` usa `Envelope<RefreshResponse>` + `unwrap()` |
+| `frontend/src/lib/api-client.ts` | Interceptor 401 desenvuelve envelope; persiste nuevo refresh |
+| `frontend/src/shared/components/ProtectedRoute.tsx` | Bootstrap persiste `newRefresh` en `localStorage` |
+| `frontend/src/features/auth/__tests__/interceptor.test.ts` | 5 fixtures MSW actualizados al formato envelope |
+| `frontend/src/shared/components/__tests__/ProtectedRoute.test.tsx` | Fixture `REFRESH_RESPONSE` actualizado |
+
+---
+
+## 2026-06-30 — Bug en WorkflowTemplateForm y pruebas de roles/permisos
+
+Dos hallazgos de la sesión de prueba local: un crash al abrir el formulario de creación de
+workflow templates, y una verificación manual completa del RBAC con tres cuentas reales.
+
+---
+
+### Bug: `<FormLabel>` fuera de `<FormField>` crasheaba la página de creación de template
+
+**Síntoma:** Al navegar a `/workflows/templates` y hacer clic en "Crear template", la página
+crasheaba con "Unexpected Application Error! useFormField should be used within \<FormField\>".
+React Router capturaba el error en su `RenderErrorBoundary`.
+
+**Mensaje de error clave:**
+```
+Error: useFormField should be used within <FormField>
+    at useFormField (form.tsx:35:9)
+    at form.tsx:80:32   ← FormLabel llamando useFormField internamente
+```
+Stack trace apuntaba a `WorkflowTemplateForm.tsx:37:40` → `FormLabel` en `form.tsx:78:53`.
+
+**Causa raíz:** `WorkflowTemplateForm.tsx` línea 134 usaba un `<FormLabel>` de shadcn/ui como
+título visual de la sección de pasos, fuera de cualquier `<FormField>`:
+
+```tsx
+// INCORRECTO — <FormLabel> fuera de <FormField>
+<FormLabel className="text-sm font-medium">Pasos del workflow</FormLabel>
+```
+
+El componente `FormLabel` de shadcn/ui llama internamente a `useFormField()`, que lee un
+contexto React (`FormFieldContext`) que solo existe dentro del render prop de
+`<FormField name="..." render={...}>`. Fuera de ese contexto, el hook lanza.
+
+**Fix:**
+```tsx
+// CORRECTO — label HTML estándar para títulos visuales de sección
+<label className="text-sm font-medium">Pasos del workflow</label>
+```
+
+**Regla resultante:** `<FormLabel>` de shadcn solo se usa dentro de `<FormField render={...}>`.
+Para cualquier título o etiqueta visual fuera de un campo de formulario → `<label>`, `<span>`
+o `<p>` HTML puro.
+
+**Archivo:** `frontend/src/features/workflows/components/WorkflowTemplateForm.tsx` línea 134.
+
+---
+
+### Pruebas de roles y permisos — verificación manual del RBAC
+
+Se levantó la infraestructura completa (`docker compose up -d`). Health check confirmado:
+
+```json
+{"status":"ok","components":{"database":"ok","redis":"ok","storage":"ok"}}
+```
+
+Backend en `localhost:8000`, frontend Vite en `localhost:5173`. Se probaron tres cuentas.
+
+**`basilyandree@gmail.com` — rol `super_admin`, `organization = None`**
+
+| Endpoint | Resultado | ¿Esperado? |
+|----------|-----------|------------|
+| POST `/auth/login/` | ✅ 200 | ✓ |
+| GET `/auth/me/` | ✅ 200 | ✓ |
+| GET `/documents/` | ❌ 403 `PERMISSION_DENIED` | ✓ correcto |
+| GET `/folders/` | ❌ 403 `PERMISSION_DENIED` | ✓ correcto |
+
+El `super_admin` recibe 403 en los endpoints de dominio porque su usuario tiene
+`organization=None`. `IsOrganizationMember` verifica `user.organization == request.organization`;
+con `organization=None` la verificación falla. Comportamiento correcto y esperado: el
+`super_admin` no es un usuario de tenant — accede al sistema vía Django Admin o endpoints de
+plataforma propios, no por la API de negocio.
+
+**`admin@acme.com` — rol `org_admin`, org: `Acme Corp`**
+
+| Endpoint | Resultado | ¿Esperado? |
+|----------|-----------|------------|
+| POST `/auth/login/` | ✅ 200 | ✓ |
+| GET `/documents/?page=1&page_size=6` | ✅ 200 (0 docs) | ✓ |
+| GET `/folders/` | ✅ 200 (1 carpeta: "Carpeta de Acme") | ✓ |
+| GET `/workflows/templates/` | ✅ 200 | ✓ |
+| GET `/audit-logs/` | ✅ 200 | ✓ |
+| GET `/search/?q=acme` | ✅ 200 | ✓ |
+| POST `/workflows/templates/` | ✅ 201 (puede crear) | ✓ |
+
+**`editor@acme.com` — rol `editor`, org: `Acme Corp`**
+
+| Endpoint | Resultado | ¿Esperado? |
+|----------|-----------|------------|
+| POST `/auth/login/` | ✅ 200 | ✓ |
+| GET `/documents/?page=1&page_size=6` | ✅ 200 (0 docs) | ✓ |
+| GET `/folders/` | ✅ 200 (1 carpeta) | ✓ |
+| POST `/folders/` | ✅ 201 (creó "Carpeta editor test") | ✓ |
+| GET `/workflows/templates/` | ✅ 200 | ✓ |
+| GET `/audit-logs/` | ❌ 403 `PERMISSION_DENIED` | ✓ correcto (solo auditor/org_admin) |
+| POST `/workflows/templates/` | ❌ 403 `PERMISSION_DENIED` | ✓ correcto (solo org_admin/supervisor) |
+| GET `/search/?q=acme` | ✅ 200 | ✓ |
+
+**Conclusión:** el RBAC funciona correctamente en todos los casos verificados. Los rechazos
+403 son legítimos — cada uno corresponde a una restricción de rol correctamente aplicada por
+el backend, no a errores de la aplicación.
+
+---
+
+## 2026-06-30 — Bug: tipos TypeScript desincronizados con la API → crash en DocumentDetailPage
+
+Al hacer clic en un documento recién subido, la página crasheaba con:
+
+```
+TypeError: Cannot read properties of undefined (reading 'email')
+    at DocumentDetailPage (DocumentDetailPage.tsx:367:92)
+```
+
+---
+
+### Cómo leer el error
+
+El mensaje `Cannot read properties of undefined (reading 'email')` significa: se intentó hacer
+`.email` sobre `undefined`. La línea 367 de `DocumentDetailPage.tsx` hacía
+`document.created_by.email`, pero `document.created_by` era `undefined` porque el backend no
+devuelve ese campo.
+
+---
+
+### Causa raíz
+
+Los tipos TypeScript del frontend modelaban los campos de autor/propietario como objetos
+anidados, pero el backend los devuelve como strings planos:
+
+| Tipo | Campo en el tipo TS (incorrecto) | Campo real del backend (correcto) |
+|------|----------------------------------|-----------------------------------|
+| `Document` | `created_by: { id: string; email: string }` | `created_by_email: string` |
+| `DocumentVersion` | `created_by: { id: string; email: string }` | `created_by_email: string` |
+| `Folder` | `owner: { id: string; email: string }` | `owner_email: string` |
+
+Además `Document` tenía campos inexistentes en la API (`storage_path` y `ocr_content`), y
+`folder` estaba tipado como `{ id, name } | null` cuando el backend devuelve el UUID como
+string o null más un campo separado `folder_name`.
+
+TypeScript no detectó el error porque los componentes usaban el tipo sin anotación explícita
+(inferencia desde el hook), y la inferencia resolvía como `any` en algunas rutas.
+
+---
+
+### Fix
+
+`frontend/src/shared/types/index.ts` — interfaz `Document` corregida:
+
+```typescript
+// ANTES (incorrecto)
+export interface Document {
+  folder: { id: string; name: string } | null
+  created_by: { id: string; email: string }
+  storage_path: string
+  ocr_content: string
+  // ...
+}
+
+// DESPUÉS (correcto — refleja la respuesta real del backend)
+export interface Document {
+  folder: string | null
+  folder_name: string | null
+  created_by_email: string
+  // storage_path y ocr_content eliminados (no existen en la API)
+  // ...
+}
+```
+
+`DocumentDetailPage.tsx` y `DocumentVersionList.tsx`:
+
+```tsx
+// ANTES
+document.created_by.email
+version.created_by.email
+
+// DESPUÉS
+document.created_by_email
+version.created_by_email
+```
+
+### Archivos modificados
+
+| Archivo | Cambio |
+|---------|--------|
+| `frontend/src/shared/types/index.ts` | Interfaces `Document`, `DocumentVersion`, `Folder` corregidas para reflejar respuesta real del backend |
+| `frontend/src/features/documents/pages/DocumentDetailPage.tsx` | Acceso via `created_by_email`, `folder`/`folder_name` correctos |
+| `frontend/src/features/documents/components/DocumentVersionList.tsx` | Acceso via `created_by_email` |
+
+---
+
+### Lección
+
+Cuando TypeScript pasa limpio pero hay crashes en runtime con `Cannot read properties of
+undefined`, el problema suele ser que el tipo estaba declarado incorrectamente (no como `any`,
+sino con una forma que no coincide con los datos reales). La causa más frecuente: el tipo TS se
+escribe antes de verificar contra la respuesta real del backend. Verificar siempre con
+`curl` o la pestaña Network de DevTools antes de tipar una respuesta de API.
 
 ---
 

@@ -502,7 +502,7 @@ fix/{name}    ← Corrección de bugs
 - Fase 5.4 (2026-06-29) — CI/CD GitHub Actions: `.github/workflows/ci.yml` (jobs paralelos backend+frontend; PG16+Redis7 como runner services; lint+pytest -m "not integration"+Codecov; gate 95% en addopts; eslint+tsc --noEmit+vitest+vite build); `.github/workflows/deploy.yml` (scaffold `workflow_dispatch` para 5.5); `pyproject.toml` `--cov-fail-under=95`; script `typecheck` en `frontend/package.json`; badges CI+Codecov en README
 - Fase 5.5 (2026-06-29) — Deploy producción: `backend/Dockerfile` multi-stage (builder→runtime; libmagic1+tesseract+poppler; collectstatic como root+chown→appuser); `frontend/Dockerfile` multi-stage (Node 20 Alpine→nginx:stable-alpine; `VITE_API_BASE_URL=/api/v1`); `docker-compose.prod.yml` 8 servicios (`migrate` one-shot + web+worker+beat+nginx+postgres+redis+minio); `nginx/nginx.conf` (HTTP→HTTPS 301, TLS 1.2/1.3, SPA fallback, proxy /api/ /admin/ /static/, `client_max_body_size 50m`); `production.py` `SECURE_PROXY_SSL_HEADER`+`CONN_MAX_AGE=60`; `scripts/deploy.sh` idempotente; `scripts/backup_db.sh` (pg_dump comprimido, retención 7 días, escritura atómica); `deploy.yml` actualizado con `appleboy/ssh-action@v1.2.0`; `docs/deploy-guide.md` guía educativa 10 secciones
 
-**Métricas (2026-06-21):** ~526 tests backend (495 normales + 27 `@pytest.mark.integration` + ~4 nuevos) + 163 tests frontend. Cobertura backend: 95%.
+**Métricas (2026-06-30):** ~526 tests backend (495 normales + 27 `@pytest.mark.integration` + ~4 nuevos) + 169 tests frontend. Cobertura backend: 95%.
 
 **Apps activas:** `apps.core`, `apps.organizations`, `apps.authentication`, `apps.permissions`, `apps.audit`, `apps.documents`, `apps.workflows`, `apps.search`, `apps.notifications`
 
