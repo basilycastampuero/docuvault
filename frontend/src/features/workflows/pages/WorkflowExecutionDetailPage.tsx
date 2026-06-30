@@ -82,11 +82,11 @@ export function WorkflowExecutionDetailPage() {
             <ArrowLeft className="h-4 w-4" />
             Volver
           </button>
-          <h1 className="text-2xl font-bold tracking-tight">{execution.document.name}</h1>
+          <h1 className="text-2xl font-bold tracking-tight">{execution.document_name}</h1>
           <div className="flex items-center gap-2">
             <ExecutionStatusBadge status={execution.status} />
             <span className="text-sm text-muted-foreground">
-              Plantilla: {execution.template.name}
+              Plantilla: {execution.template_name}
             </span>
           </div>
         </div>
@@ -142,17 +142,17 @@ export function WorkflowExecutionDetailPage() {
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Documento</span>
                 <Link
-                  to={`/documents/${execution.document.id}`}
+                  to={`/documents/${execution.document}`}
                   className="font-medium text-primary hover:underline truncate max-w-32"
                 >
-                  {execution.document.name}
+                  {execution.document_name}
                 </Link>
               </div>
               <Separator />
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Iniciado por</span>
-                <span className="font-medium truncate max-w-32" title={execution.started_by.email}>
-                  {execution.started_by.email}
+                <span className="font-medium truncate max-w-32" title={execution.started_by_email}>
+                  {execution.started_by_email}
                 </span>
               </div>
               <Separator />

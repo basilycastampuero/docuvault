@@ -146,22 +146,24 @@ export interface WorkflowTemplate {
 
 export interface WorkflowExecution {
   id: string
-  template: { id: string; name: string }
-  document: { id: string; name: string }
+  template: string
+  template_name: string
+  document: string
+  document_name: string
   current_step: WorkflowStep | null
   status: WorkflowStatus
-  started_by: { id: string; email: string }
+  started_by_email: string
   started_at: string | null
   completed_at: string | null
   created_at: string
-  updated_at: string
 }
 
 export interface WorkflowStepLog {
   id: string
-  step: { id: string; name: string; order: number }
+  step_name: string
+  step_order: number
   action: WorkflowStepAction
-  performed_by: { id: string; email: string }
+  performed_by_email: string
   comment: string
   created_at: string
 }

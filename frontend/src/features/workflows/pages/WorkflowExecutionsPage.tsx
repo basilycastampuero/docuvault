@@ -123,11 +123,11 @@ export function WorkflowExecutionsPage() {
                 <div className="flex items-center gap-4">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <h3 className="font-medium truncate">{execution.document.name}</h3>
+                      <h3 className="font-medium truncate">{execution.document_name}</h3>
                       <ExecutionStatusBadge status={execution.status} />
                     </div>
                     <p className="text-sm text-muted-foreground mt-0.5">
-                      Plantilla: {execution.template.name}
+                      Plantilla: {execution.template_name}
                     </p>
                     <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
                       {execution.current_step && (

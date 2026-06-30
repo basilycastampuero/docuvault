@@ -65,12 +65,12 @@ export function WorkflowStepLogTimeline({ logs }: WorkflowStepLogTimelineProps) 
                   {config.label}
                 </span>
                 <span className="text-xs font-medium text-foreground">
-                  Paso {log.step.order}: {log.step.name}
+                  Paso {log.step_order}: {log.step_name}
                 </span>
               </div>
 
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <span>{log.performed_by.email}</span>
+                <span>{log.performed_by_email}</span>
                 <span>&bull;</span>
                 <time dateTime={log.created_at}>
                   {formatDistanceToNow(new Date(log.created_at), {
