@@ -17,7 +17,12 @@ jobs:
     environment: production
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Deploy (Phase 5.5)
-        run: echo "Deploy pipeline — to be implemented in Phase 5.5"
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            cd /opt/saasvault
+            bash scripts/deploy.sh

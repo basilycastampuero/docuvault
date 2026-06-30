@@ -21,6 +21,12 @@ CSRF_COOKIE_SECURE = True
 
 CORS_ALLOWED_ORIGINS = config("CORS_ALLOWED_ORIGINS", default="", cast=Csv())
 
+# Tell Django the real protocol when running behind Nginx with SSL termination
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+# Keep DB connections alive for 60s to reduce connection overhead per request
+CONN_MAX_AGE = 60
+
 # ---------------------------------------------------------------------------
 # Logging — switch console handler to JSON formatter for log aggregators
 # ---------------------------------------------------------------------------

@@ -1,0 +1,162 @@
+services:
+  # ---------------------------------------------------------------------------
+  # migrate — runs once before web/worker/beat start.
+  # Applies pending migrations and collects static files, then exits cleanly.
+  # ---------------------------------------------------------------------------
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    # collectstatic is baked into the image at build time (see backend/Dockerfile).
+    # This service only needs to apply pending DB migrations.
+    command: python manage.py migrate --noinput
+    env_file:
+      - ./backend/.env.production
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # web — Gunicorn WSGI server serving the Django API
+  # ---------------------------------------------------------------------------
+  web:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: >
+      gunicorn config.wsgi:application
+      --bind 0.0.0.0:8000
+      --workers 2
+      --timeout 120
+    env_file:
+      - ./backend/.env.production
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # worker — Celery worker for async tasks (OCR, AI analysis, notifications)
+  # ---------------------------------------------------------------------------
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A config.celery worker --loglevel=info
+    env_file:
+      - ./backend/.env.production
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # beat — Celery beat scheduler (periodic tasks: orphan blob cleanup, etc.)
+  # ---------------------------------------------------------------------------
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A config.celery beat --loglevel=info
+    env_file:
+      - ./backend/.env.production
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # nginx — reverse proxy, SSL termination, and SPA static file serving.
+  # The frontend Dockerfile bakes /app/dist into /usr/share/nginx/html.
+  # ---------------------------------------------------------------------------
+  nginx:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      - web
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # postgres — primary relational database
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    # Native Postgres vars (POSTGRES_DB / POSTGRES_USER / POSTGRES_PASSWORD) must
+    # be present in .env.production — see .env.production.example for their names.
+    # env_file injects them directly; no ${...} YAML interpolation needed.
+    env_file:
+      - ./backend/.env.production
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # $$VAR → Compose passes $VAR literally; the container shell expands it.
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # redis — cache, Celery broker, and result backend
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # minio — S3-compatible object storage for document blobs
+  # ---------------------------------------------------------------------------
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    # Native MinIO vars (MINIO_ROOT_USER / MINIO_ROOT_PASSWORD) must be present
+    # in .env.production — see .env.production.example for their names.
+    # env_file injects them directly; no ${...} YAML interpolation needed.
+    env_file:
+      - ./backend/.env.production
+    volumes:
+      - minio_data:/data
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
