@@ -87,6 +87,71 @@ celery -A config.celery worker --loglevel=info
 
 See `docs/manual-testing.md` for step-by-step curl examples testing all features.
 
+## Deploy
+
+### VPS requirements
+
+- Ubuntu 22.04 LTS
+- Docker Engine + Docker Compose plugin installed
+- `openssl` available (pre-installed on Ubuntu)
+- Port 80 and 443 open in the firewall
+
+### Initial setup
+
+```bash
+# On the VPS — clone the repo
+git clone git@github.com:<your-user>/SasVault.git /opt/saasvault
+cd /opt/saasvault
+
+# Copy the production env template and fill in all values
+cp backend/.env.production.example backend/.env.production
+nano backend/.env.production   # set DB_PASSWORD, DJANGO_SECRET_KEY, etc.
+
+# Make scripts executable
+chmod +x scripts/deploy.sh scripts/backup_db.sh
+
+# Deploy (builds images, runs migrations, starts all services)
+bash scripts/deploy.sh
+```
+
+A self-signed certificate is generated automatically on the first run. The browser will warn on first visit — this is expected without a real domain. To replace with a real certificate, put your `.crt` and `.key` files in `nginx/certs/` before running `deploy.sh`.
+
+Services after deploy:
+- API: `https://<VPS_IP>/api/v1/`
+- Frontend: `https://<VPS_IP>/`
+- Django admin: `https://<VPS_IP>/admin/`
+
+### Subsequent deploys
+
+Re-running `deploy.sh` is idempotent: it pulls latest code, skips cert generation if the cert exists, rebuilds images, runs pending migrations, and restarts services.
+
+### GitHub Actions deploy (workflow_dispatch)
+
+Set these three secrets in **Settings → Secrets and variables → Actions** on GitHub:
+
+| Secret | Value |
+|--------|-------|
+| `VPS_HOST` | IP address or hostname of the VPS |
+| `VPS_USER` | SSH username (e.g. `ubuntu`) |
+| `VPS_SSH_KEY` | Private SSH key whose public key is in `~/.ssh/authorized_keys` on the VPS |
+
+Then trigger a deploy from **Actions → Deploy to VPS → Run workflow**.
+
+### Backup and restore
+
+```bash
+# Create a compressed backup (7-day retention in /var/backups/saasvault/)
+bash scripts/backup_db.sh
+
+# Add to crontab for nightly automated backups at 02:00
+# 0 2 * * * cd /opt/saasvault && bash scripts/backup_db.sh >> /var/log/saasvault-backup.log 2>&1
+
+# Restore from a backup file
+gunzip -c /var/backups/saasvault/saasvault_<timestamp>.sql.gz \
+  | docker compose -f docker-compose.prod.yml exec -T postgres \
+      psql -U saasvault_user saasvault_prod
+```
+
 ## Status
 
 Active development — **Phase 5 in progress (5.4 complete).** Next: Phase 5.5 (VPS deploy).

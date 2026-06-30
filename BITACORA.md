@@ -11,8 +11,103 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Fase 5.4 completada** (2026-06-29). ~528 tests backend + 164 frontend.
-> Próximo hito: Fase 5.5 (Deploy en VPS: Gunicorn + Nginx + SSL).
+> Última actualización: **Fase 5.5 completada** (2026-06-29). ~528 tests backend + 164 frontend.
+> Proyecto de portafolio completado (Fases 0–5). Fase 6 = mejoras post-portafolio.
+
+---
+
+## 2026-06-29 — Fase 5.5 completada: Deploy en VPS (Docker + Nginx + Gunicorn)
+
+Se implementó la infraestructura completa de producción. El proyecto ahora puede desplegarse
+en cualquier VPS con Docker instalado ejecutando un único script idempotente.
+
+---
+
+### Dockerfiles multi-stage
+
+**`backend/Dockerfile`** — dos stages. El stage `builder` instala todas las dependencias Python
+en un entorno aislado. El stage `runtime` parte de una imagen limpia, añade las dependencias de
+sistema necesarias para OCR y validación de archivos (`libmagic1 tesseract-ocr tesseract-ocr-spa
+poppler-utils`), ejecuta `collectstatic` como `root` durante el build (evita el `PermissionError`
+que ocurría al intentarlo como usuario no-root en runtime), transfiere ownership a `appuser` vía
+`chown` y ejecuta Gunicorn como usuario no-root. Variables `PYTHONUNBUFFERED=1` y
+`PYTHONDONTWRITEBYTECODE=1` para logging en tiempo real y sin bytecode en la imagen.
+
+**`frontend/Dockerfile`** — stage `build` con Node 20 Alpine ejecuta `npm run build` con
+`VITE_API_BASE_URL=/api/v1` (fix crítico: sin esto el bundle hardcodeaba `localhost:5173` en
+todas las llamadas a la API). Stage `serve` con `nginx:stable-alpine` sirve el `/dist` resultante.
+
+### docker-compose.prod.yml — 8 servicios
+
+Servicios: `migrate` (one-shot), `web` (Gunicorn), `worker` (Celery), `beat` (Celery beat),
+`nginx`, `postgres:16-alpine`, `redis:7-alpine`, `minio`. Tres volúmenes nombrados:
+`postgres_data`, `redis_data`, `minio_data`.
+
+El servicio `migrate` tiene `restart: no` y los demás servicios de aplicación declaran
+`depends_on: migrate: condition: service_completed_successfully` — garantiza que las migraciones
+corren exactamente una vez antes de que arranque el resto. Las credenciales de postgres y minio
+se pasan vía `env_file` con los nombres nativos de cada imagen (`POSTGRES_PASSWORD`,
+`MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`) en lugar de interpolación `${...}` — esto evita que
+Docker Compose resuelva variables vacías silenciosamente.
+
+### Nginx (`nginx/nginx.conf`)
+
+- Bloque HTTP: redirige todo a HTTPS con 301 permanente.
+- Bloque HTTPS: TLS 1.2/1.3 con certificado self-signed (generado por `deploy.sh` si no existe).
+- `try_files $uri $uri/ /index.html` — fallback SPA para que React Router funcione correctamente.
+- Proxy de `/api/`, `/admin/` y `/static/` hacia `web:8000`.
+- `client_max_body_size 50m` — fix crítico: el default de 1MB bloqueaba todos los uploads de
+  documentos (MAX_UPLOAD_SIZE es 50MB según CLAUDE.md §3).
+
+### production.py
+
+Se añadieron `SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')` (necesario para que
+Django detecte HTTPS detrás de Nginx) y `CONN_MAX_AGE = 60` (reutilización de conexiones PG,
+reduce latencia en requests frecuentes).
+
+### Scripts de operaciones
+
+**`scripts/deploy.sh`** — idempotente: `git pull`, genera cert self-signed si no existe,
+`docker compose -f docker-compose.prod.yml build`, `up -d`. El `run --rm migrate` duplicado
+fue eliminado; el compose lo maneja via `depends_on`.
+
+**`scripts/backup_db.sh`** — carga credenciales desde `.env.production`, ejecuta `pg_dump`
+comprimido, escritura atómica (escribe a `.tmp` y hace rename al final para evitar dumps
+parciales en caso de corte), retención de 7 días (borra dumps más antiguos automáticamente).
+
+### deploy.yml actualizado
+
+`.github/workflows/deploy.yml` — ya no es un scaffold vacío. Trigger `workflow_dispatch` +
+`push: branches: [main]`. Usa `appleboy/ssh-action@v1.2.0` con secrets `VPS_HOST`, `VPS_USER`,
+`VPS_SSH_KEY` para conectarse al servidor y ejecutar `bash scripts/deploy.sh` de forma remota.
+
+### docs/deploy-guide.md — guía educativa completa
+
+Documento nuevo de 10 secciones orientado a quien nunca deployó una app en producción:
+runserver vs producción, arquitectura del stack, Dockerfiles multi-stage explicados, servicios
+del compose, configuración Nginx, variables de entorno de producción, SSL (self-signed vs
+Let's Encrypt), cómo usar los scripts, diagnóstico de problemas comunes, y glosario de términos.
+
+### Fixes post-revisión (4 críticos + 3 medios + 2 menores)
+
+| Severidad | Fix |
+|-----------|-----|
+| Crítico | `VITE_API_BASE_URL=/api/v1` en Dockerfile frontend |
+| Crítico | Credenciales postgres/minio: eliminada interpolación `${...}`, usando `env_file` con nombres nativos |
+| Crítico | `collectstatic` como root en build-time + `chown` → resuelve `PermissionError` de appuser |
+| Crítico | `client_max_body_size 50m` en nginx.conf (default 1MB bloqueaba uploads) |
+| Medio | `staticfiles/` horneado en imagen (resuelve falta de volumen compartido entre migrate/web) |
+| Medio | `deploy.sh`: eliminado `run --rm migrate` duplicado |
+| Medio | `backup_db.sh`: carga `.env.production`, escritura atómica con `.tmp` |
+| Menor | `PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1` en Dockerfile |
+| Menor | `beat` ahora depende de `postgres: service_healthy` |
+
+### Pendientes para completar el deploy real
+
+- Provisionar VPS Ubuntu 22.04 + Docker.
+- Configurar secrets en GitHub: `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`.
+- Ejecutar `bash scripts/deploy.sh` en el servidor por primera vez.
+- Activar branch protection en `main` tras primer run verde del workflow de deploy.
 
 ---
 

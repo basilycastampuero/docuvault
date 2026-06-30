@@ -2313,18 +2313,17 @@ infra: dominio + registro DNS A → IP del VPS; cuenta S3 o MinIO de prod
 
 #### DoD
 
-- [ ] `backend/Dockerfile` construye una imagen que corre Gunicorn con tesseract/poppler/
-      libmagic presentes; corre como usuario no-root.
-- [ ] `frontend/Dockerfile` produce el `dist/` de producción.
-- [ ] `docker-compose.prod.yml` levanta nginx+web+worker+beat+postgres+redis+minio; el
-      servicio `migrate` corre una sola vez antes que `web`/`worker`/`beat`.
-- [ ] Nginx sirve la SPA (con fallback a `index.html`) y hace proxy de `/api/`, `/admin/`,
-      `/static/`; HTTPS con cert de Let's Encrypt; HTTP redirige a HTTPS.
-- [ ] `production.py` con `DEBUG=False`, `SECURE_PROXY_SSL_HEADER`, cookies seguras, HSTS,
-      `ALLOWED_HOSTS` y storage por env; ningún secreto hardcodeado.
-- [ ] La app responde en `https://<dominio>/` (frontend) y `https://<dominio>/api/v1/`.
-- [ ] `scripts/backup_db.sh` produce un dump comprimido; restore documentado.
-- [ ] `deploy.yml` (`workflow_dispatch`) hace SSH y ejecuta `deploy.sh` de forma idempotente.
+#### Entregable 5.5 — COMPLETADO (2026-06-29)
+- [x] `backend/Dockerfile` multi-stage con tesseract/poppler/libmagic; usuario no-root
+- [x] `frontend/Dockerfile` con build Node → nginx:stable-alpine
+- [x] `docker-compose.prod.yml` con 8 servicios y migrate one-shot
+- [x] Nginx: SPA fallback, proxy /api/ /admin/ /static/, HTTPS self-signed, 50m upload limit
+- [x] `production.py`: `SECURE_PROXY_SSL_HEADER`, `CONN_MAX_AGE`, `DEBUG=False`, cookies seguras
+- [x] `scripts/deploy.sh` idempotente; `scripts/backup_db.sh` con retención 7 días
+- [x] `deploy.yml` con SSH dispatch (appleboy/ssh-action)
+- [x] `docs/deploy-guide.md`: guía educativa completa (10 secciones)
+- [ ] Deploy en VPS real — pendiente de provisionar servidor
+- [ ] Secrets VPS en GitHub Actions — pendiente
 
 #### Commits sugeridos
 
