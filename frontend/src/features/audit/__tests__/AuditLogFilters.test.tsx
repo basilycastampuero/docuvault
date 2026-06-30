@@ -132,8 +132,8 @@ describe('AuditLogFilters — submit behavior', () => {
     )
   })
 
-  it('calls onFilter with user param when email input is filled', async () => {
-    /**Should include user email in params when the user fills in the field */
+  it('calls onFilter with user_email param when email input is filled', async () => {
+    /**Should include user_email in params when the user fills in the field */
     const { onFilter } = renderFilters()
     fireEvent.change(screen.getByPlaceholderText(/usuario@ejemplo\.com/i), {
       target: { value: 'admin@acme.com' },
@@ -145,7 +145,7 @@ describe('AuditLogFilters — submit behavior', () => {
       expect(onFilter).toHaveBeenCalledTimes(1)
     })
     expect(onFilter).toHaveBeenCalledWith(
-      expect.objectContaining({ user: 'admin@acme.com' }),
+      expect.objectContaining({ user_email: 'admin@acme.com' }),
     )
   })
 
@@ -162,8 +162,8 @@ describe('AuditLogFilters — submit behavior', () => {
     expect(params).not.toHaveProperty('entity_type')
   })
 
-  it('does NOT include user in params when email field is empty', async () => {
-    /**Should omit empty user field from params */
+  it('does NOT include user_email in params when email field is empty', async () => {
+    /**Should omit empty user_email field from params */
     const { onFilter } = renderFilters()
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /filtrar/i }))
@@ -172,10 +172,10 @@ describe('AuditLogFilters — submit behavior', () => {
       expect(onFilter).toHaveBeenCalledTimes(1)
     })
     const params = onFilter.mock.calls[0][0]
-    expect(params).not.toHaveProperty('user')
+    expect(params).not.toHaveProperty('user_email')
   })
 
-  it('calls onFilter with both entity_type and user when both are filled', async () => {
+  it('calls onFilter with both entity_type and user_email when both are filled', async () => {
     /**Should combine multiple filter values into one params object */
     const { onFilter } = renderFilters()
     fireEvent.change(screen.getByPlaceholderText(/ej: document/i), {
@@ -191,10 +191,37 @@ describe('AuditLogFilters — submit behavior', () => {
       expect(onFilter).toHaveBeenCalledTimes(1)
     })
     expect(onFilter).toHaveBeenCalledWith(
-      expect.objectContaining({ entity_type: 'folder', user: 'editor@corp.com' }),
+      expect.objectContaining({ entity_type: 'folder', user_email: 'editor@corp.com' }),
     )
   })
 })
+
+  it('serializes created_before as end-of-day, not midnight', async () => {
+    /**Should include the entire selected day in the range, not cut it off at midnight.
+     * Bug: new Date("2026-06-29").toISOString() → "2026-06-29T00:00:00.000Z" (midnight),
+     * which excludes virtually all events from that day.
+     * Fix: endOfDay(parseISO("2026-06-29")).toISOString() → non-midnight end-of-day. */
+    const { onFilter } = renderFilters()
+    // "Hasta" is the second date input (first is "Desde")
+    const dateInputs = document.querySelectorAll('input[type="date"]')
+    const hastaInput = dateInputs[1] as HTMLInputElement
+    expect(hastaInput).toBeDefined()
+
+    fireEvent.change(hastaInput, { target: { value: '2026-06-29' } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /filtrar/i }))
+    })
+    await waitFor(() => {
+      expect(onFilter).toHaveBeenCalledTimes(1)
+    })
+
+    const params = onFilter.mock.calls[0][0]
+    expect(params.created_before).toBeDefined()
+    // The old bug produced midnight UTC — assert that is NOT what we send.
+    expect(params.created_before).not.toContain('T00:00:00.000Z')
+    // The result must be a valid ISO timestamp later in the day.
+    expect(() => new Date(params.created_before as string)).not.toThrow()
+  })
 
 // ─── Clear button ─────────────────────────────────────────────────────────────
 

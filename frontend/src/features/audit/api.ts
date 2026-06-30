@@ -5,7 +5,7 @@ export interface ListAuditLogsParams {
   action?: AuditAction
   entity_type?: string
   entity_id?: string
-  user?: string
+  user_email?: string
   created_after?: string
   created_before?: string
   page?: number

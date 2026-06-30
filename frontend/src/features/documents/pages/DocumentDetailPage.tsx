@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { ArrowLeft, Download, RefreshCw, Loader2, Folder, BrainCircuit } from 'lucide-react'
+import { AlertCircle, ArrowLeft, Download, RefreshCw, Loader2, Folder, BrainCircuit } from 'lucide-react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { Button } from '@/components/ui/button'
@@ -20,6 +20,8 @@ import { DocumentMetadataForm } from '../components/DocumentMetadataForm'
 import { useDocument, useDownloadDocument, useReprocessOcr, useRequestAiAnalysis } from '../hooks'
 
 interface AiAnalysis {
+  status?: string
+  error?: string
   summary?: string
   entities?: string[]
   suggested_category?: string
@@ -41,6 +43,25 @@ function AiAnalysisPanel({ document, isPending, onRequest, onAnalysisReady }: Ai
   useEffect(() => {
     if (analysis) onAnalysisReady()
   }, [analysis, onAnalysisReady])
+
+  if (analysis?.status === 'failed') {
+    return (
+      <div className="space-y-3">
+        <div className="flex items-start gap-2 text-sm text-destructive">
+          <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+          <p>El análisis falló permanentemente. Puede intentarlo de nuevo.</p>
+        </div>
+        <Button size="sm" variant="outline" onClick={onRequest} disabled={isPending}>
+          {isPending ? (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          ) : (
+            <RefreshCw className="mr-2 h-4 w-4" />
+          )}
+          Reintentar
+        </Button>
+      </div>
+    )
+  }
 
   if (analysis) {
     return (

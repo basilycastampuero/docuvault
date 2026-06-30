@@ -84,6 +84,38 @@ class TestAnalyzeDocumentTask:
             with pytest.raises(Retry):
                 analyze_document.apply(args=[str(doc.id)])
 
+    def test_permanent_error_writes_failure_marker(self):
+        """A non-transient error writes a failure marker to document.metadata."""
+        doc = DocumentFactory()
+        with patch(
+            "apps.documents.services.ai_service.analyze",
+            side_effect=RuntimeError("unexpected failure"),
+        ):
+            with pytest.raises(RuntimeError):
+                analyze_document.apply(args=[str(doc.id)])
+
+        doc.refresh_from_db()
+        ai = doc.metadata.get("ai_analysis", {})
+        assert ai["status"] == "failed"
+        assert "error" in ai
+
+    def test_permanent_error_failure_marker_does_not_affect_other_metadata(self):
+        """Failure marker write leaves other metadata fields intact."""
+        doc = DocumentFactory()
+        doc.metadata["custom_field"] = "preserved"
+        doc.save(update_fields=["metadata"])
+
+        with patch(
+            "apps.documents.services.ai_service.analyze",
+            side_effect=ValueError("corrupt data"),
+        ):
+            with pytest.raises(ValueError):
+                analyze_document.apply(args=[str(doc.id)])
+
+        doc.refresh_from_db()
+        assert doc.metadata["custom_field"] == "preserved"
+        assert doc.metadata["ai_analysis"]["status"] == "failed"
+
 
 class TestCleanupOrphanBlobsTask:
     def test_task_delegates_to_cleanup_service(self):

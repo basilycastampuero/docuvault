@@ -7,10 +7,14 @@ export const auditKeys = {
   detail: (id: number) => [...auditKeys.all, id] as const,
 }
 
-export function useAuditLogs(params: ListAuditLogsParams = {}) {
+export function useAuditLogs(
+  params: ListAuditLogsParams = {},
+  options?: { enabled?: boolean },
+) {
   return useQuery({
     queryKey: auditKeys.list(params),
     queryFn: () => auditApi.list(params),
+    enabled: options?.enabled ?? true,
   })
 }
 

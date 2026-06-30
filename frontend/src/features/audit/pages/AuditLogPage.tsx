@@ -18,7 +18,10 @@ export function AuditLogPage() {
   const [filters, setFilters] = useState<ListAuditLogsParams>({})
   const [page, setPage] = useState(1)
 
-  const { data, isLoading } = useAuditLogs({ ...filters, page })
+  const { data, isLoading } = useAuditLogs(
+    { ...filters, page },
+    { enabled: !!role && ALLOWED_ROLES.includes(role) },
+  )
 
   if (role && !ALLOWED_ROLES.includes(role)) {
     return (

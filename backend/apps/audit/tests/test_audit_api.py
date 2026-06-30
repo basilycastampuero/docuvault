@@ -129,6 +129,29 @@ class TestAuditLogList:
         assert len(data) == 1
         assert data[0]["user"]["id"] == str(auditor.id)
 
+    def test_filter_by_user_email(self):
+        org = OrganizationFactory()
+        auditor = _auditor(org)
+        other_user = UserFactory(organization=org, role=UserRole.EDITOR)
+        AuditLogFactory(organization=org, user=auditor)
+        AuditLogFactory(organization=org, user=other_user)
+
+        response = _client_for(auditor).get(LIST_URL, {"user_email": auditor.email})
+        data = response.json()["data"]
+        assert len(data) == 1
+        assert data[0]["user"]["id"] == str(auditor.id)
+
+    def test_filter_by_user_email_case_insensitive(self):
+        org = OrganizationFactory()
+        auditor = _auditor(org)
+        AuditLogFactory(organization=org, user=auditor)
+
+        upper_email = auditor.email.upper()
+        response = _client_for(auditor).get(LIST_URL, {"user_email": upper_email})
+        data = response.json()["data"]
+        assert len(data) == 1
+        assert data[0]["user"]["id"] == str(auditor.id)
+
     def test_filter_by_created_after(self):
         org = OrganizationFactory()
         user = _auditor(org)

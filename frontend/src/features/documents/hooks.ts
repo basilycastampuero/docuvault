@@ -30,7 +30,13 @@ export function useDocument(id: string, pollForAi = false) {
     refetchInterval: (query) => {
       const ocrStatus = query.state.data?.ocr_status
       if (ocrStatus === 'pending' || ocrStatus === 'processing') return 3000
-      if (pollForAi && !query.state.data?.metadata?.ai_analysis) return 3000
+      if (!pollForAi) return false
+      const aiAnalysis = query.state.data?.metadata?.ai_analysis as
+        | { status?: string }
+        | undefined
+      // Keep polling while no result exists OR while the previous attempt failed
+      // (the user may have clicked "Reintentar"). Stop only on a successful result.
+      if (!aiAnalysis || aiAnalysis.status === 'failed') return 3000
       return false
     },
   })

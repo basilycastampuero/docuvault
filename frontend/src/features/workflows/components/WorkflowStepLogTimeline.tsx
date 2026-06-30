@@ -1,6 +1,6 @@
 import { formatDistanceToNow } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { CheckCircle2, XCircle, MessageSquare } from 'lucide-react'
+import { CheckCircle2, XCircle, MessageSquare, Circle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { WorkflowStepLog, WorkflowStepAction } from '@/shared/types'
 
@@ -41,7 +41,11 @@ export function WorkflowStepLogTimeline({ logs }: WorkflowStepLogTimelineProps) 
   return (
     <ol className="relative border-l border-border space-y-6 ml-3">
       {logs.map((log) => {
-        const config = ACTION_CONFIG[log.action]
+        const config = ACTION_CONFIG[log.action as keyof typeof ACTION_CONFIG] ?? {
+          label: log.action,
+          Icon: Circle,
+          className: 'text-gray-500 bg-gray-50 border-gray-200',
+        }
         const Icon = config.Icon
 
         return (

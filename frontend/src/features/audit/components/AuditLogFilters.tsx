@@ -1,4 +1,5 @@
 import { useForm } from 'react-hook-form'
+import { endOfDay, parseISO } from 'date-fns'
 import { Search, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -32,7 +33,7 @@ interface AuditLogFiltersProps {
 interface FilterFormValues {
   action: string
   entity_type: string
-  user: string
+  user_email: string
   created_after: string
   created_before: string
 }
@@ -42,7 +43,7 @@ export function AuditLogFilters({ onFilter }: AuditLogFiltersProps) {
     defaultValues: {
       action: '',
       entity_type: '',
-      user: '',
+      user_email: '',
       created_after: '',
       created_before: '',
     },
@@ -54,12 +55,14 @@ export function AuditLogFilters({ onFilter }: AuditLogFiltersProps) {
     const params: ListAuditLogsParams = {}
     if (values.action) params.action = values.action as AuditAction
     if (values.entity_type) params.entity_type = values.entity_type
-    if (values.user) params.user = values.user
+    if (values.user_email) params.user_email = values.user_email
     if (values.created_after) {
       params.created_after = new Date(values.created_after).toISOString()
     }
     if (values.created_before) {
-      params.created_before = new Date(values.created_before).toISOString()
+      // Use end-of-day so the selected date is fully included in the range.
+      // new Date("2026-06-29") yields midnight UTC, which excludes most of that day.
+      params.created_before = endOfDay(parseISO(values.created_before)).toISOString()
     }
     onFilter(params)
   }
@@ -105,7 +108,7 @@ export function AuditLogFilters({ onFilter }: AuditLogFiltersProps) {
           <Label className="text-xs">Usuario (email)</Label>
           <Input
             placeholder="usuario@ejemplo.com"
-            {...register('user')}
+            {...register('user_email')}
           />
         </div>
 

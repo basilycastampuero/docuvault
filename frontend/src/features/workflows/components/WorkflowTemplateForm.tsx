@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useForm, useFieldArray } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -78,16 +78,21 @@ export function WorkflowTemplateForm({
     name: 'steps',
   })
 
+  // Capture defaultValues on first render so the effect does not re-fire when a
+  // parent passes an inline object literal (new reference every render).
+  const defaultValuesRef = useRef(defaultValues)
   useEffect(() => {
-    if (defaultValues) {
+    if (defaultValuesRef.current) {
       form.reset({
         name: '',
         description: '',
         steps: [{ ...DEFAULT_STEP }],
-        ...defaultValues,
+        ...defaultValuesRef.current,
       })
     }
-  }, [defaultValues, form])
+  // form is stable across renders (returned by useForm); run once on mount only.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form])
 
   return (
     <Form {...form}>
