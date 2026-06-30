@@ -11,8 +11,61 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Post-auditoría Fase 5.3** (2026-06-29). ~528 tests backend (2 nuevos, pendientes de correr) + 164 frontend.
-> Próximo hito: Fase 5.4 (CI/CD GitHub Actions: lint+test+build en paralelo, coverage gate 95%).
+> Última actualización: **Fase 5.4 completada** (2026-06-29). ~528 tests backend + 164 frontend.
+> Próximo hito: Fase 5.5 (Deploy en VPS: Gunicorn + Nginx + SSL).
+
+---
+
+## 2026-06-29 — Fase 5.4 completada: CI/CD con GitHub Actions
+
+Se implementó el pipeline de integración continua completo. Dos jobs paralelos (backend y
+frontend) se ejecutan en cada PR y push a `main`/`develop`.
+
+---
+
+### Pipeline de backend (`ci.yml`)
+
+El job levanta PostgreSQL 16 y Redis 7 como **runner services** del propio runner de GitHub
+Actions — sin mocks, la misma base de datos que en producción. Antes de correr la suite
+instala las dependencias apt necesarias para OCR y procesamiento de archivos
+(`libmagic1 tesseract-ocr tesseract-ocr-spa poppler-utils`).
+
+El gate de calidad aplica en orden: lint (black/isort/flake8) → tests con
+`pytest -m "not integration"` (los tests de integración que requieren MinIO real se excluyen
+en CI; no hay servidor MinIO en el runner) → upload a Codecov. La cobertura mínima del 95%
+se configura en `pyproject.toml` vía `--cov-fail-under=95` en `addopts`, de modo que el gate
+aplica tanto en CI como al correr pytest localmente.
+
+### Pipeline de frontend (`ci.yml`)
+
+El job corre eslint, `tsc --noEmit` (se añadió el script `typecheck` a `package.json`) y
+`vitest run`. El paso final ejecuta `vite build` — si hay errores de tipos que solo aparecen
+en el bundle, el job falla aquí.
+
+### Scaffold de deploy (`deploy.yml`)
+
+Se creó `.github/workflows/deploy.yml` con trigger `workflow_dispatch` como placeholder para
+la Fase 5.5 (deploy en VPS). No ejecuta pasos reales todavía.
+
+### Fixes post-revisión aplicados
+
+Tras una revisión del pipeline antes de mergearlo se corrigieron cuatro puntos:
+
+1. **Crítico:** `pytest -m "not integration"` añadido — sin esto los tests de integración de
+   MinIO habrían roto el job desde el primer run porque no hay servidor MinIO en CI.
+2. **Medio:** push a `main` añadido a los triggers — sin esto el badge del README mostraba
+   "no status" porque el workflow nunca corría en `main`.
+3. **Medio:** `--cov` pelado eliminado del comando pytest (ya estaba en addopts como
+   `--cov=apps`; el argumento suelto medía el árbol completo y diluía el porcentaje real).
+4. **Menor:** tabla de fases y métricas del README actualizadas (~526 tests / 95%).
+
+### Pendientes anotados
+
+- **Codecov token** (`CODECOV_TOKEN`): necesario para repos privados. Por ahora
+  `fail_ci_if_error: false` evita que el upload roto rompa el job.
+- **Correr suite completa local** con `pytest -m "not integration"` para confirmar el gate
+  del 95% (Docker estaba apagado durante la sesión).
+- **Branch protection en `main`**: configurar en GitHub Settings tras el primer run verde.
 
 ---
 

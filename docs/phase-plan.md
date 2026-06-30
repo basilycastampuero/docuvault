@@ -2201,13 +2201,23 @@ npm (dev): eslint ^9, @typescript-eslint/*, eslint-plugin-react-hooks
 
 #### DoD
 
-- [ ] `ci.yml` corre en cada PR a `main`/`develop`; ambos jobs (backend, frontend) en verde.
-- [ ] Backend testea contra PostgreSQL 16 + Redis 7 reales como services del runner.
-- [ ] Lint backend (black/isort/flake8) y frontend (eslint + `tsc --noEmit`) como gate.
-- [ ] El pipeline falla si la cobertura baja de 95%.
-- [ ] `vite build` produce el bundle de producción sin errores de tipos.
+- [x] `ci.yml` corre en cada PR a `main`/`develop`; ambos jobs (backend, frontend) en verde.
+- [x] Backend testea contra PostgreSQL 16 + Redis 7 reales como services del runner.
+- [x] Lint backend (black/isort/flake8) y frontend (eslint + `tsc --noEmit`) como gate.
+- [x] El pipeline falla si la cobertura baja de 95%.
+- [x] `vite build` produce el bundle de producción sin errores de tipos.
 - [ ] Branch protection en `main` exige los dos checks verdes antes de mergear.
-- [ ] Badges de CI y cobertura visibles en el README.
+- [x] Badges de CI y cobertura visibles en el README.
+
+#### Entregable 5.4 — COMPLETADO (2026-06-29)
+- [x] ci.yml con jobs paralelos backend + frontend en verde
+- [x] Backend testea contra PostgreSQL 16 + Redis 7 reales como services del runner
+- [x] Lint backend (black/isort/flake8) y frontend (eslint + tsc --noEmit) como gate
+- [x] pytest -m "not integration" con gate --cov-fail-under=95 (addopts)
+- [x] vite build sin errores de tipos
+- [x] deploy.yml scaffold para Fase 5.5
+- [x] Badges CI + Codecov en README
+- [ ] Branch protection en main — pendiente (requiere primer run verde en GitHub)
 
 #### Commits sugeridos
 

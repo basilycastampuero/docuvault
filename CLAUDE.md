@@ -465,7 +465,7 @@ fix/{name}    ← Corrección de bugs
 
 ## 17. Estado actual del proyecto
 
-**Fase actual:** Fase 5 EN CURSO. 5.1, 5.2, 5.3 y 5.7 COMPLETAS (5.3 completada 2026-06-21); siguiente: 5.4 (CI/CD GitHub Actions).
+**Fase actual:** Fase 5 EN CURSO. 5.1, 5.2, 5.3, 5.4 y 5.7 COMPLETAS (5.4 completada 2026-06-29); siguiente: 5.5 (Deploy VPS).
 
 **Completado:**
 - Fase 0 — Setup: WSL2, Docker Compose (PG16+Redis7+MinIO), pre-commit hooks, .env.example
@@ -499,6 +499,7 @@ fix/{name}    ← Corrección de bugs
 - Auditoría Fase 5 (2026-06-15) — rehidratación de perfil en `ProtectedRoute`; `Promise.reject` en interceptor 401; claim atómico en `_send` de notificaciones; toasts globales via `MutationCache`; narrowing seguro de `ApiError`; tests de rollback de on_commit
 - Fase 5.2 — Frontend gestión documental: `FolderBrowserPage`, `DocumentListPage`, `DocumentDetailPage`, upload drag&drop con progreso, `OcrStatusBadge` con polling, `SearchPage`, `DashboardPage`; `react-dropzone`; `date-fns`
 - Fase 5.3 (2026-06-21) — Frontend workflows + auditoría: `WorkflowTemplateForm` (`useFieldArray`, validación zod), `AdvanceStepDialog` (`AlertDialog` + select acción + textarea), `ExecutionStatusBadge`, `WorkflowStepLogTimeline` (`formatDistanceToNow`); `AuditLogFilters`, `AuditLogTable`, `AuditLogPage`; `DocumentDetailPage` pestaña "Análisis IA" con polling; shadcn: `textarea`, `checkbox`, `separator`, `accordion`; rutas `/workflows`, `/workflows/templates/:id`, `/workflows/executions`, `/workflows/executions/:id`, `/audit-logs`; 74 tests Vitest nuevos
+- Fase 5.4 (2026-06-29) — CI/CD GitHub Actions: `.github/workflows/ci.yml` (jobs paralelos backend+frontend; PG16+Redis7 como runner services; lint+pytest -m "not integration"+Codecov; gate 95% en addopts; eslint+tsc --noEmit+vitest+vite build); `.github/workflows/deploy.yml` (scaffold `workflow_dispatch` para 5.5); `pyproject.toml` `--cov-fail-under=95`; script `typecheck` en `frontend/package.json`; badges CI+Codecov en README
 
 **Métricas (2026-06-21):** ~526 tests backend (495 normales + 27 `@pytest.mark.integration` + ~4 nuevos) + 163 tests frontend. Cobertura backend: 95%.
 
@@ -545,7 +546,7 @@ fix/{name}    ← Corrección de bugs
 37. Polling de `useWorkflowExecution` cada 5s mientras `status in (pending, in_progress)`; se detiene al llegar a estado terminal. Mismo patrón que `ocr_status` en 5.2. Sin websockets (over-engineering para portafolio).
 38. Paginación en listas de workflows (templates/executions) aplazada: las páginas de lista muestran solo la primera página. El componente `<Pagination>` y el soporte de backend ya existen; pendiente de conectar. Deuda anotada para 5.4/5.5.
 
-**Próximo paso:** Fase 5.4 — CI/CD GitHub Actions. Ver `docs/phase-plan.md` §5.4 para el plan detallado.
+**Próximo paso:** Fase 5.5 — Deploy en VPS (Gunicorn+Nginx+SSL). Ver `docs/phase-plan.md` §5.5 para el plan detallado.
 
 ## 18. Cómo correr el proyecto localmente
 
