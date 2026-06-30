@@ -2,6 +2,9 @@
 
 Enterprise document management SaaS platform with multi-tenancy, role-based access control, automated workflows, and full-text search.
 
+[![CI](https://github.com/basilycastampuero/SasVault/actions/workflows/ci.yml/badge.svg)](https://github.com/basilycastampuero/SasVault/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/basilycastampuero/SasVault/branch/main/graph/badge.svg)](https://codecov.io/gh/basilycastampuero/SasVault)
+
 ## Tech Stack
 
 **Backend:** Python 3.13 · Django 5.1 · Django REST Framework · PostgreSQL 16 · Redis 7 · Celery
@@ -86,7 +89,7 @@ See `docs/manual-testing.md` for step-by-step curl examples testing all features
 
 ## Status
 
-Active development — **Phase 5 in progress (5.6 complete).** Next: Phase 5.1 (React frontend).
+Active development — **Phase 5 in progress (5.4 complete).** Next: Phase 5.5 (VPS deploy).
 
 | Phase | Scope | Status |
 |-------|-------|--------|
@@ -97,10 +100,15 @@ Active development — **Phase 5 in progress (5.6 complete).** Next: Phase 5.1 (
 | 3.2 | Workflow engine (templates, steps, executions, approval flows) | ✅ Complete |
 | 3.3 | Full-text search with PostgreSQL tsvector + GIN | ✅ Complete |
 | 4 | Celery pipelines + OCR + AI analysis (Claude Haiku) | ✅ Complete |
+| 5.1 | Frontend setup + auth (React + Vite + Tailwind + shadcn/ui) | ✅ Complete |
+| 5.2 | Frontend document management (upload, folders, search) | ✅ Complete |
+| 5.3 | Frontend workflows + audit log + AI analysis tab | ✅ Complete |
+| 5.4 | CI/CD GitHub Actions (backend + frontend parallel jobs) | ✅ Complete |
+| 5.5 | Deploy VPS (Gunicorn + Nginx + SSL) | 🔄 Next |
 | 5.6 | Observability: health check, Sentry, JSON logging | ✅ Complete |
-| 5.1–5.5, 5.7 | Frontend, CI/CD, deploy, notifications | 🔄 In progress |
+| 5.7 | Email notifications (Celery + step-assigned events) | ✅ Complete |
 
-**501 tests passing, 99% coverage.**
+**~526 tests passing, 95% coverage.**
 
 ---
 
