@@ -131,7 +131,7 @@ export function WorkflowTemplateForm({
 
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <FormLabel className="text-sm font-medium">Pasos del workflow</FormLabel>
+            <label className="text-sm font-medium">Pasos del workflow</label>
             <Button
               type="button"
               variant="outline"
