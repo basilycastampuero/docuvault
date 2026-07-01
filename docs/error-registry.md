@@ -5,7 +5,7 @@
 > auditorías de cada fase.
 >
 > Uso principal: referencia histórica y fuente para `docs/ai-agent-guide.md`.
-> Última actualización: 2026-07-01.
+> Última actualización: 2026-07-01. Errores registrados: ERR-001 a ERR-056.
 
 ---
 
@@ -21,7 +21,7 @@
 | `DEPENDENCY` | ERR-004, ERR-028, ERR-029, ERR-030, ERR-031, ERR-033, ERR-034, ERR-035, ERR-036, ERR-055 |
 | `POLLING` | ERR-024, ERR-052 |
 | `DEAD_CODE` | ERR-003, ERR-007, ERR-032, ERR-051, ERR-053 |
-| `GITIGNORE` | ERR-001 |
+| `GITIGNORE` | ERR-001, ERR-056 |
 | `RBAC` | ERR-027 |
 | `N_PLUS_1` | ERR-011 |
 | `SOFT_DELETE` | ERR-006 |
@@ -1116,3 +1116,27 @@
 **Causa raíz:** El tokenizador de PostgreSQL FTS considera el guión bajo como parte de un token, no como separador de palabras. Comportamiento no obvio para quien espera que `annual_report` sea tokenizado como `annual` + `report`.
 
 **Solución aplicada:** Los tests usan nombres con espacios naturales (`"annual report"`). La documentación del proyecto advierte este comportamiento. No se cambió el tokenizador (`simple` es intencional para corpus multi-idioma).
+
+---
+
+## Post-portafolio: correcciones post-5.5 (2026-07-01)
+
+---
+
+## ERR-056: Patrón `lib/` demasiado amplio en `.gitignore` — ignoraba `frontend/src/shared/lib/`
+
+| Campo | Valor |
+|---|---|
+| Fecha | 2026-07-01 |
+| Fase | Post-Fase 5.5 |
+| Severidad | MEDIA |
+| Categoría | `GITIGNORE` |
+| Archivo(s) afectado(s) | `.gitignore`, `frontend/src/shared/lib/roles.ts` |
+
+**Descripción:** El `.gitignore` raíz contenía el patrón `lib/` (heredado de la plantilla Python de gitignore), que ignora cualquier directorio llamado `lib` en toda la jerarquía del proyecto. Al crear `frontend/src/shared/lib/roles.ts` (centralización de `WRITE_ROLES` en Fase post-5.5), git marcaba `frontend/src/shared/lib/` como directorio ignorado. El archivo fue incluido correctamente en el commit mediante `git add` explícito, pero cualquier archivo nuevo creado dentro de `frontend/src/shared/lib/` habría sido silenciosamente omitido de `git status` como si no existiera.
+
+**Causa raíz:** El patrón `lib/` de la plantilla estándar de Python `.gitignore` fue copiado sin adaptar su alcance. Su intención original es ignorar el directorio `lib/` del entorno virtual Python (que vive en `backend/lib/`), no directorios `lib/` arbitrarios dentro del código fuente del frontend.
+
+**Solución aplicada:** `lib/` sustituido por `backend/lib/` y `lib64/` por `backend/lib64/` en el `.gitignore` raíz, limitando el patrón exclusivamente al subdirectorio backend donde reside el virtualenv Python.
+
+**Commit de corrección:** `76f0f8f`
