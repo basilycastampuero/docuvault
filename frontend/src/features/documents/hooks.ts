@@ -75,6 +75,7 @@ export function useUploadDocument() {
     onSuccess: () => {
       setUploadProgress(0)
       queryClient.invalidateQueries({ queryKey: documentKeys.all })
+      queryClient.invalidateQueries({ queryKey: ['folders'] })
     },
     onError: () => {
       setUploadProgress(0)

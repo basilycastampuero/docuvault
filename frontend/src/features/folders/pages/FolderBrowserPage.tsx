@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { Plus, Loader2 } from 'lucide-react'
+import { Plus, Loader2, Upload } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -46,6 +46,7 @@ import {
 } from '../hooks'
 import type { Folder } from '@/shared/types'
 import { DocumentCard } from '@/features/documents/components/DocumentCard'
+import { DocumentUploadDropzone } from '@/features/documents/components/DocumentUploadDropzone'
 
 const renameSchema = z.object({
   name: z.string().min(1, 'El nombre es obligatorio').max(255),
@@ -62,6 +63,7 @@ export function FolderBrowserPage() {
   const canWrite = role ? WRITE_ROLES.includes(role) : false
 
   const [createOpen, setCreateOpen] = useState(false)
+  const [uploadOpen, setUploadOpen] = useState(false)
   const [renameTarget, setRenameTarget] = useState<Folder | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Folder | null>(null)
   const [docPage, setDocPage] = useState(1)
@@ -122,12 +124,20 @@ export function FolderBrowserPage() {
           ) : null}
         </div>
 
-        {canWrite && (
-          <Button onClick={() => setCreateOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            Nueva carpeta
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {canWrite && !isRoot && (
+            <Button variant="outline" onClick={() => setUploadOpen(true)}>
+              <Upload className="mr-2 h-4 w-4" />
+              Subir documento
+            </Button>
+          )}
+          {canWrite && (
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Nueva carpeta
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Root folders or children */}
@@ -213,6 +223,15 @@ export function FolderBrowserPage() {
             )}
           </section>
         </>
+      )}
+
+      {/* Upload document dialog */}
+      {!isRoot && (
+        <DocumentUploadDropzone
+          open={uploadOpen}
+          folderId={id}
+          onOpenChange={setUploadOpen}
+        />
       )}
 
       {/* Create folder dialog */}
