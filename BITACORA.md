@@ -20,6 +20,11 @@
 **Mejora UX:** botón "Subir documento" en `FolderBrowserPage` (solo visible en carpetas específicas, no en raíz). Pre-asigna `folder_id` de la carpeta actual. Invalida `['folders']` en `useUploadDocument` para refrescar la lista de documentos de la carpeta.
 **Archivos:** `hooks.ts` (invalidación), `FolderBrowserPage.tsx` (botón + dialog).
 
+#### Fix: folder_id incorrecto al navegar entre carpetas
+**Bug:** Al subir desde una carpeta vacía, `folder_id` usaba el valor de la carpeta anterior (react-hook-form lee `defaultValues` solo en el mount inicial; el componente no se desmontaba al navegar).
+**Fix:** `key={id}` en `<DocumentUploadDropzone>` → React remonta al cambiar de carpeta, reinicializando el form con el `folderId` correcto.
+**Commit:** `43e8380`
+
 ---
 
 ## 2026-06-30 — Fix: exponer `ocr_content` en API y UI (commit 7d34ea8)
