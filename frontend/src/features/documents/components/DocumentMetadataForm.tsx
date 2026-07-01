@@ -11,9 +11,19 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { updateDocumentSchema, type UpdateDocumentFormValues } from '../validation'
-import { useUpdateDocument } from '../hooks'
+import { useUpdateDocument, useFolderTree } from '../hooks'
 import type { Document } from '@/shared/types'
+
+// Sentinel value for "no folder" in the Select. Mapped to null before the API call.
+const ROOT_SENTINEL = '__root__'
 
 interface DocumentMetadataFormProps {
   document: Document
@@ -22,6 +32,7 @@ interface DocumentMetadataFormProps {
 
 export function DocumentMetadataForm({ document, onSuccess }: DocumentMetadataFormProps) {
   const updateDocument = useUpdateDocument()
+  const { data: folders } = useFolderTree()
 
   const form = useForm<UpdateDocumentFormValues>({
     resolver: zodResolver(updateDocumentSchema),
@@ -29,6 +40,7 @@ export function DocumentMetadataForm({ document, onSuccess }: DocumentMetadataFo
       name: document.name,
       description: document.description ?? '',
       tags: document.tags.join(', '),
+      folder_id: document.folder ?? ROOT_SENTINEL,
     },
   })
 
@@ -37,6 +49,7 @@ export function DocumentMetadataForm({ document, onSuccess }: DocumentMetadataFo
       name: document.name,
       description: document.description ?? '',
       tags: document.tags.join(', '),
+      folder_id: document.folder ?? ROOT_SENTINEL,
     })
   }, [document.id, form])
 
@@ -48,14 +61,21 @@ export function DocumentMetadataForm({ document, onSuccess }: DocumentMetadataFo
           .filter(Boolean)
       : []
 
+    // Only include folder_id in the payload when the user actually changed it,
+    // to avoid a no-op audit log entry on every metadata save.
+    const data: Parameters<typeof updateDocument.mutate>[0]['data'] = {
+      name: values.name,
+      description: values.description,
+      tags,
+    }
+    if (form.formState.dirtyFields.folder_id) {
+      data.folder_id = values.folder_id === ROOT_SENTINEL ? null : (values.folder_id ?? null)
+    }
+
     updateDocument.mutate(
       {
         id: document.id,
-        data: {
-          name: values.name,
-          description: values.description,
-          tags,
-        },
+        data,
       },
       { onSuccess },
     )
@@ -101,6 +121,35 @@ export function DocumentMetadataForm({ document, onSuccess }: DocumentMetadataFo
               <FormControl>
                 <Input placeholder="contrato, legal, 2024" {...field} />
               </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <FormField
+          control={form.control}
+          name="folder_id"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Carpeta</FormLabel>
+              <Select
+                value={field.value ?? ROOT_SENTINEL}
+                onValueChange={field.onChange}
+              >
+                <FormControl>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Sin carpeta" />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  <SelectItem value={ROOT_SENTINEL}>Sin carpeta</SelectItem>
+                  {folders?.map((folder) => (
+                    <SelectItem key={folder.id} value={folder.id}>
+                      {folder.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <FormMessage />
             </FormItem>
           )}

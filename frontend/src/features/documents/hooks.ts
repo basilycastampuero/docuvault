@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   documentsApi,
+  foldersApi,
   type ListDocumentsParams,
   type UploadDocumentData,
   type UpdateDocumentData,
@@ -13,6 +14,10 @@ export const documentKeys = {
   list: (params: ListDocumentsParams = {}) => [...documentKeys.all, 'list', params] as const,
   detail: (id: string) => [...documentKeys.all, id] as const,
   versions: (id: string, page: number) => [...documentKeys.all, id, 'versions', page] as const,
+}
+
+export const folderKeys = {
+  tree: ['folders', 'tree'] as const,
 }
 
 export function useDocuments(params: ListDocumentsParams = {}) {
@@ -47,6 +52,13 @@ export function useDocumentVersions(id: string, page = 1) {
     queryKey: documentKeys.versions(id, page),
     queryFn: () => documentsApi.getVersions(id, page),
     enabled: !!id,
+  })
+}
+
+export function useFolderTree() {
+  return useQuery({
+    queryKey: folderKeys.tree,
+    queryFn: () => foldersApi.getTree(),
   })
 }
 

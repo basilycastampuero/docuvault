@@ -40,22 +40,14 @@ def get_children(organization: "Organization", folder: Folder) -> "QuerySet[Fold
     )
 
 
-def get_folder_tree(organization: "Organization") -> list[dict]:
+def get_folder_tree(organization: "Organization") -> "QuerySet[Folder]":
     """
-    Return a flat list of all folders for the org with parent_id included,
-    suitable for client-side tree construction. Avoids recursive SQL.
+    Return a flat, ordered queryset of all folders for the org, suitable for
+    client-side tree construction. Serialise with FolderSerializer to get
+    each folder's parent UUID alongside created_at/updated_at.
     """
-    folders = (
+    return (
         Folder.objects.filter(organization=organization)
         .select_related("owner")
         .order_by("name")
     )
-    return [
-        {
-            "id": str(f.id),
-            "name": f.name,
-            "parent_id": str(f.parent_id) if f.parent_id else None,
-            "owner": f.owner.email,
-        }
-        for f in folders
-    ]

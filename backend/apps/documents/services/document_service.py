@@ -27,6 +27,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Sentinel used to distinguish "caller did not pass folder_id" from explicit None.
+FOLDER_UNSET = object()
+
 _MANUAL_STATUS_TRANSITIONS = {
     DocumentStatus.DRAFT: {DocumentStatus.UNDER_REVIEW},
     DocumentStatus.UNDER_REVIEW: {DocumentStatus.DRAFT},
@@ -162,8 +165,9 @@ def update_document_metadata(
     name: str | None = None,
     description: str | None = None,
     tags: list[str] | None = None,
+    folder_id=FOLDER_UNSET,
 ) -> Document:
-    """Update mutable metadata fields: name, description, tags."""
+    """Update mutable metadata fields: name, description, tags, folder."""
     update_fields = ["updated_at"]
     old_values: dict = {}
     new_values: dict = {}
@@ -185,6 +189,25 @@ def update_document_metadata(
         document.tags = tags
         new_values["tags"] = tags
         update_fields.append("tags")
+
+    if folder_id is not FOLDER_UNSET:
+        from apps.documents.selectors import get_folder_by_id as _get_folder_by_id
+
+        new_folder = None
+        if folder_id is not None:
+            new_folder = _get_folder_by_id(
+                organization=organization, folder_id=folder_id
+            )
+            # Defensive guard: get_folder_by_id already scopes by org, but assert
+            # explicitly to prevent any future refactor from introducing a leak.
+            if str(new_folder.organization_id) != str(organization.pk):
+                raise PermissionDenied("Folder does not belong to this organization.")
+        old_values["folder_id"] = (
+            str(document.folder_id) if document.folder_id else None
+        )
+        document.folder = new_folder
+        new_values["folder_id"] = str(folder_id) if folder_id is not None else None
+        update_fields.append("folder")
 
     if len(update_fields) > 1:
         document.save(update_fields=update_fields)

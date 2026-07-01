@@ -6,15 +6,20 @@ from .views import (
     DocumentDownloadView,
     DocumentListCreateView,
     DocumentReprocessOcrView,
+    DocumentStartWorkflowView,
     DocumentVersionListView,
     FolderChildrenView,
     FolderDetailView,
     FolderDocumentsView,
     FolderListCreateView,
+    FolderTreeView,
 )
 
 urlpatterns = [
     path("folders/", FolderListCreateView.as_view(), name="folder-list-create"),
+    # `folders/tree/` MUST appear before `folders/<uuid:folder_id>/` to avoid
+    # Django routing "tree" as a UUID.
+    path("folders/tree/", FolderTreeView.as_view(), name="folder-tree"),
     path("folders/<uuid:folder_id>/", FolderDetailView.as_view(), name="folder-detail"),
     path(
         "folders/<uuid:folder_id>/children/",
@@ -51,5 +56,10 @@ urlpatterns = [
         "documents/<uuid:document_id>/analyze/",
         DocumentAnalyzeView.as_view(),
         name="document-analyze",
+    ),
+    path(
+        "documents/<uuid:document_id>/start-workflow/",
+        DocumentStartWorkflowView.as_view(),
+        name="document-start-workflow",
     ),
 ]

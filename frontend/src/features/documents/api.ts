@@ -1,6 +1,6 @@
 import { apiClient, unwrap, unwrapPaginated } from '@/lib/api-client'
 import type { Envelope, PaginatedEnvelope, PaginatedMeta } from '@/shared/types'
-import type { Document, DocumentVersion, DocumentStatus } from '@/shared/types'
+import type { Document, DocumentVersion, DocumentStatus, Folder } from '@/shared/types'
 
 export interface ListDocumentsParams {
   folder_id?: string
@@ -22,6 +22,7 @@ export interface UpdateDocumentData {
   name?: string
   description?: string
   tags?: string[]
+  folder_id?: string | null
 }
 
 export interface UploadVersionData {
@@ -128,5 +129,12 @@ export const documentsApi = {
 
   requestAiAnalysis: async (id: string): Promise<void> => {
     await apiClient.post(`/documents/${id}/analyze/`)
+  },
+}
+
+export const foldersApi = {
+  getTree: async (): Promise<Folder[]> => {
+    const response = await apiClient.get<Envelope<Folder[]>>('/folders/tree/')
+    return unwrap(response)
   },
 }

@@ -103,6 +103,8 @@ class DocumentMetadataUpdateSerializer(serializers.Serializer):
         choices=[DocumentStatus.DRAFT, DocumentStatus.UNDER_REVIEW],
         required=False,
     )
+    # No `default` so the field is absent from validated_data when not sent.
+    folder_id = serializers.UUIDField(required=False, allow_null=True)
 
 
 class DocumentVersionUploadSerializer(serializers.Serializer):

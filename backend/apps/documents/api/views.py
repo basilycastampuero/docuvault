@@ -2,6 +2,7 @@ import logging
 
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -25,6 +26,7 @@ from apps.documents.selectors import (
     get_document_versions,
     get_documents,
     get_folder_by_id,
+    get_folder_tree,
     get_root_folders,
 )
 from apps.documents.services import document_service, folder_service
@@ -33,6 +35,7 @@ from apps.permissions.permissions import HasRole, IsOrganizationMember
 logger = logging.getLogger(__name__)
 
 _EDITOR_ROLES = ["org_admin", "supervisor", "editor"]
+_WORKFLOW_STARTER_ROLES = ["editor", "supervisor", "org_admin", "super_admin"]
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +170,19 @@ class FolderChildrenView(APIView):
 
 
 @extend_schema(tags=["Folders"])
+class FolderTreeView(APIView):
+    permission_classes = [IsOrganizationMember]
+
+    @extend_schema(
+        summary="List all folders as a flat list (for client-side tree building)",
+        responses=FolderSerializer(many=True),
+    )
+    def get(self, request: Request) -> Response:
+        folders = get_folder_tree(organization=request.organization)
+        return Response({"data": FolderSerializer(folders, many=True).data, "meta": {}})
+
+
+@extend_schema(tags=["Folders"])
 class FolderDocumentsView(APIView):
     permission_classes = [IsOrganizationMember]
 
@@ -279,11 +295,14 @@ class DocumentDetailView(APIView):
                 new_status=DocumentStatus(data.pop("status")),
             )
 
-        if data:
+        folder_id = data.pop("folder_id", document_service.FOLDER_UNSET)
+
+        if data or folder_id is not document_service.FOLDER_UNSET:
             doc = document_service.update_document_metadata(
                 organization=request.organization,
                 user=request.user,
                 document=doc,
+                folder_id=folder_id,
                 **data,
             )
 
@@ -375,6 +394,52 @@ class DocumentAnalyzeView(APIView):
         )
         return Response(
             {"data": DocumentSerializer(doc).data}, status=status.HTTP_202_ACCEPTED
+        )
+
+
+@extend_schema(tags=["Documents"])
+class DocumentStartWorkflowView(APIView):
+    permission_classes = [IsOrganizationMember]
+
+    @extend_schema(
+        summary="Start a workflow execution from a document",
+        description=(
+            "Starts a new workflow execution using the specified template for this document. "
+            "Requires editor role or above. Returns 409 if the document already has an "
+            "active workflow execution."
+        ),
+        responses={201: None},
+    )
+    def post(self, request: Request, document_id) -> Response:
+        from apps.workflows.api.serializers import (
+            WorkflowExecutionSerializer,
+            WorkflowStartFromDocumentSerializer,
+        )
+        from apps.workflows.selectors import get_template_by_id
+        from apps.workflows.services import workflow_service as wf_service
+
+        if not HasRole(*_WORKFLOW_STARTER_ROLES)().has_permission(request, None):
+            raise PermissionDenied()
+
+        serializer = WorkflowStartFromDocumentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        doc = get_document_by_id(
+            organization=request.organization, document_id=document_id
+        )
+        template = get_template_by_id(
+            organization=request.organization, template_id=data["template_id"]
+        )
+        execution = wf_service.start_workflow(
+            organization=request.organization,
+            user=request.user,
+            document=doc,
+            template=template,
+        )
+        return Response(
+            {"data": WorkflowExecutionSerializer(execution).data},
+            status=status.HTTP_201_CREATED,
         )
 
 

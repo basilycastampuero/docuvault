@@ -41,6 +41,8 @@ export const updateDocumentSchema = z.object({
   name: z.string().min(1, 'El nombre es obligatorio').max(255),
   description: z.string().max(1000).optional(),
   tags: z.string().optional(),
+  // Uses ROOT_SENTINEL ('__root__') for "no folder"; mapped to null on submit.
+  folder_id: z.string().nullable().optional(),
 })
 
 export type UpdateDocumentFormValues = z.infer<typeof updateDocumentSchema>
