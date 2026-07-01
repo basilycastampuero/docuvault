@@ -11,8 +11,14 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Fix: exponer `ocr_content` en API y pestaña frontend** (2026-06-30). Rama `feature/5.2-frontend-documents`.
+> Última actualización: **Feature: subir documentos desde la carpeta** (2026-06-30). Rama `feature/5.2-frontend-documents`.
 > Proyecto de portafolio completado (Fases 0–5). Fase 6 = mejoras post-portafolio.
+
+---
+
+## 2026-06-30 — Feature: subir documentos desde la carpeta
+**Mejora UX:** botón "Subir documento" en `FolderBrowserPage` (solo visible en carpetas específicas, no en raíz). Pre-asigna `folder_id` de la carpeta actual. Invalida `['folders']` en `useUploadDocument` para refrescar la lista de documentos de la carpeta.
+**Archivos:** `hooks.ts` (invalidación), `FolderBrowserPage.tsx` (botón + dialog).
 
 ---
 
