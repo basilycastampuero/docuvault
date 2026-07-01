@@ -21,6 +21,7 @@ import {
 import { AppPagination } from '@/shared/components/Pagination'
 import { useAuthStore } from '@/features/auth/store'
 import { DocumentCard } from '../components/DocumentCard'
+import { WRITE_ROLES } from '@/shared/lib/roles'
 import { DocumentUploadDropzone } from '../components/DocumentUploadDropzone'
 import { useDocuments, useDeleteDocument } from '../hooks'
 import type { Document, DocumentStatus } from '@/shared/types'
@@ -33,8 +34,6 @@ const STATUS_OPTIONS: { label: string; value: DocumentStatus | 'all' }[] = [
   { label: 'Rechazado', value: 'rejected' },
   { label: 'Archivado', value: 'archived' },
 ]
-
-const WRITE_ROLES = ['super_admin', 'org_admin', 'supervisor', 'editor']
 
 export function DocumentListPage() {
   const role = useAuthStore((s) => s.user?.role)

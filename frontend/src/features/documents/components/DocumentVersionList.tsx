@@ -35,6 +35,7 @@ import {
 import { AppPagination } from '@/shared/components/Pagination'
 import { useAuthStore } from '@/features/auth/store'
 import { useDocumentVersions, useUploadVersion } from '../hooks'
+import { WRITE_ROLES } from '@/shared/lib/roles'
 import { validateFile, ALLOWED_EXTENSIONS, MAX_FILE_SIZE } from '../validation'
 import type { Document } from '@/shared/types'
 
@@ -46,8 +47,6 @@ type UploadVersionFormValues = z.infer<typeof uploadVersionSchema>
 interface DocumentVersionListProps {
   document: Document
 }
-
-const WRITE_ROLES = ['super_admin', 'org_admin', 'supervisor', 'editor']
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`

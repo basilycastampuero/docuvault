@@ -30,7 +30,11 @@ const CONFIG: Record<WorkflowStatus, { label: string; className: string }> = {
 }
 
 export function ExecutionStatusBadge({ status }: ExecutionStatusBadgeProps) {
-  const { label, className } = CONFIG[status]
+  const cfg = CONFIG[status] ?? {
+    label: String(status ?? 'Desconocido'),
+    className: 'bg-gray-100 text-gray-500 hover:bg-gray-100',
+  }
+  const { label, className } = cfg
   return (
     <Badge variant="secondary" className={cn('text-xs font-medium', className)}>
       {label}

@@ -93,7 +93,10 @@ export function useWorkflowExecution(id: string) {
     queryFn: () => workflowsApi.executions.getById(id),
     enabled: !!id,
     refetchInterval: (query) => {
+      const updateCount = query.state.dataUpdateCount ?? 0
       const status = query.state.data?.status
+      // Cap workflow polling at ~4 min (48 × 5s)
+      if (updateCount > 48 && (status === 'pending' || status === 'in_progress')) return false
       if (status === 'pending' || status === 'in_progress') return 5000
       return false
     },

@@ -34,6 +34,9 @@ export function useDocument(id: string, pollForAi = false) {
     enabled: !!id,
     refetchInterval: (query) => {
       const ocrStatus = query.state.data?.ocr_status
+      const updateCount = query.state.dataUpdateCount ?? 0
+      // Cap OCR polling at ~2 min (40 × 3s)
+      if (updateCount > 40 && (ocrStatus === 'pending' || ocrStatus === 'processing')) return false
       if (ocrStatus === 'pending' || ocrStatus === 'processing') return 3000
       if (!pollForAi) return false
       const aiAnalysis = query.state.data?.metadata?.ai_analysis as

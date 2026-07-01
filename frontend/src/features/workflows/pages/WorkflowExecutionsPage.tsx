@@ -35,9 +35,7 @@ import { useAuthStore } from '@/features/auth/store'
 import { useWorkflowExecutions, useStartWorkflowExecution, useWorkflowTemplates } from '../hooks'
 import { useDocuments } from '@/features/documents/hooks'
 import { ExecutionStatusBadge } from '../components/ExecutionStatusBadge'
-
-const START_ROLES = ['super_admin', 'org_admin', 'supervisor', 'editor'] as const
-type StartRole = (typeof START_ROLES)[number]
+import { START_ROLES, type StartRole } from '@/shared/lib/roles'
 
 function canStart(role: string | undefined): role is StartRole {
   return START_ROLES.includes(role as StartRole)

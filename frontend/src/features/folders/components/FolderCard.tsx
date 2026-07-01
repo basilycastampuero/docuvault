@@ -10,14 +10,13 @@ import {
 } from '@/components/ui/dropdown-menu'
 import type { Folder as FolderType } from '@/shared/types'
 import { useAuthStore } from '@/features/auth/store'
+import { WRITE_ROLES } from '@/shared/lib/roles'
 
 interface FolderCardProps {
   folder: FolderType
   onRename: (folder: FolderType) => void
   onDelete: (folder: FolderType) => void
 }
-
-const WRITE_ROLES = ['super_admin', 'org_admin', 'supervisor', 'editor']
 
 export function FolderCard({ folder, onRename, onDelete }: FolderCardProps) {
   const navigate = useNavigate()

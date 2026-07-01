@@ -16,6 +16,7 @@ import type { Document } from '@/shared/types'
 import { useAuthStore } from '@/features/auth/store'
 import { OcrStatusBadge } from './OcrStatusBadge'
 import { useDownloadDocument } from '../hooks'
+import { WRITE_ROLES } from '@/shared/lib/roles'
 
 interface DocumentCardProps {
   document: Document
@@ -43,8 +44,6 @@ function formatFileSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
-
-const WRITE_ROLES = ['super_admin', 'org_admin', 'supervisor', 'editor']
 
 export function DocumentCard({ document, onDelete }: DocumentCardProps) {
   const navigate = useNavigate()

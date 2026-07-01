@@ -1,5 +1,5 @@
-import { apiClient, unwrap, unwrapPaginated } from '@/lib/api-client'
-import type { Envelope, PaginatedEnvelope, PaginatedMeta, AuditLog, AuditAction } from '@/shared/types'
+import { apiClient, unwrapPaginated } from '@/lib/api-client'
+import type { PaginatedEnvelope, PaginatedMeta, AuditLog, AuditAction } from '@/shared/types'
 
 export interface ListAuditLogsParams {
   action?: AuditAction
@@ -22,10 +22,5 @@ export const auditApi = {
       params: cleanParams,
     })
     return unwrapPaginated(response)
-  },
-
-  getById: async (id: number): Promise<AuditLog> => {
-    const response = await apiClient.get<Envelope<AuditLog>>(`/audit-logs/${id}/`)
-    return unwrap(response)
   },
 }

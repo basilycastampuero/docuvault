@@ -47,13 +47,12 @@ import {
 import type { Folder } from '@/shared/types'
 import { DocumentCard } from '@/features/documents/components/DocumentCard'
 import { DocumentUploadDropzone } from '@/features/documents/components/DocumentUploadDropzone'
+import { WRITE_ROLES } from '@/shared/lib/roles'
 
 const renameSchema = z.object({
   name: z.string().min(1, 'El nombre es obligatorio').max(255),
 })
 type RenameFormValues = z.infer<typeof renameSchema>
-
-const WRITE_ROLES = ['super_admin', 'org_admin', 'supervisor', 'editor']
 
 export function FolderBrowserPage() {
   const { id } = useParams<{ id?: string }>()

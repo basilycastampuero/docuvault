@@ -93,7 +93,7 @@ export const documentsApi = {
   getVersions: async (
     id: string,
     page = 1,
-  ): Promise<{ items: DocumentVersion[]; meta: PaginatedMeta }> => {
+  ): Promise<{ items: DocumentVersion[]; meta: Partial<PaginatedMeta> }> => {
     const response = await apiClient.get<PaginatedEnvelope<DocumentVersion>>(
       `/documents/${id}/versions/`,
       { params: { page } },

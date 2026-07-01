@@ -20,6 +20,7 @@ import { DocumentMetadataForm } from '../components/DocumentMetadataForm'
 import { useDocument, useDownloadDocument, useReprocessOcr, useRequestAiAnalysis } from '../hooks'
 import { useWorkflowTemplates } from '@/features/workflows/hooks'
 import { StartWorkflowDialog } from '@/features/workflows/components/StartWorkflowDialog'
+import { WRITE_ROLES } from '@/shared/lib/roles'
 
 interface AiAnalysis {
   status?: string
@@ -166,8 +167,6 @@ function formatFileSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
-
-const WRITE_ROLES = ['super_admin', 'org_admin', 'supervisor', 'editor']
 
 export function DocumentDetailPage() {
   const { id } = useParams<{ id: string }>()

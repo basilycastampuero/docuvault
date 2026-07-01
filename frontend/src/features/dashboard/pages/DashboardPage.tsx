@@ -6,8 +6,7 @@ import { useAuthStore } from '@/features/auth/store'
 import { DocumentCard } from '@/features/documents/components/DocumentCard'
 import { useDocuments } from '@/features/documents/hooks'
 import { useFolders } from '@/features/folders/hooks'
-
-const WRITE_ROLES = ['super_admin', 'org_admin', 'supervisor', 'editor']
+import { WRITE_ROLES } from '@/shared/lib/roles'
 
 export function DashboardPage() {
   const navigate = useNavigate()
