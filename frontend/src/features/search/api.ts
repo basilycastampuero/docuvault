@@ -1,13 +1,12 @@
 import { apiClient, unwrapPaginated } from '@/lib/api-client'
-import type { PaginatedEnvelope, PaginatedMeta } from '@/shared/types'
-import type { Document } from '@/shared/types'
+import type { PaginatedEnvelope, PaginatedMeta, SearchResult } from '@/shared/types'
 
 export const searchApi = {
   search: async (
     query: string,
     page = 1,
-  ): Promise<{ items: Document[]; meta: PaginatedMeta }> => {
-    const response = await apiClient.get<PaginatedEnvelope<Document>>('/search/', {
+  ): Promise<{ items: SearchResult[]; meta: PaginatedMeta }> => {
+    const response = await apiClient.get<PaginatedEnvelope<SearchResult>>('/search/', {
       params: { q: query, page },
     })
     return unwrapPaginated(response)

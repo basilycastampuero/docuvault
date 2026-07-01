@@ -30,6 +30,7 @@ class SearchResultSerializer(serializers.ModelSerializer):
             "mime_type",
             "file_size",
             "status",
+            "ocr_status",
             "version",
             "tags",
             "folder",

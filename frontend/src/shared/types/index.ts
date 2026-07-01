@@ -87,6 +87,10 @@ export interface Document {
   updated_at: string
 }
 
+export interface SearchResult extends Omit<Document, 'checksum' | 'metadata' | 'ocr_content'> {
+  rank: number
+}
+
 export interface DocumentVersion {
   id: string
   version_number: number

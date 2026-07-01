@@ -25,7 +25,11 @@ interface AiAnalysis {
   status?: string
   error?: string
   summary?: string
-  entities?: string[]
+  entities?: {
+    dates: string[]
+    amounts: string[]
+    names: string[]
+  }
   suggested_category?: string
 }
 
@@ -84,20 +88,27 @@ function AiAnalysisPanel({ document, isPending, onRequest, onAnalysisReady }: Ai
             <Badge variant="outline">{analysis.suggested_category}</Badge>
           </div>
         )}
-        {analysis.entities && analysis.entities.length > 0 && (
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">
-              Entidades detectadas
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {analysis.entities.map((entity) => (
-                <Badge key={entity} variant="secondary" className="text-xs">
-                  {entity}
-                </Badge>
-              ))}
+        {analysis.entities && (() => {
+          const all = [
+            ...(analysis.entities!.dates ?? []),
+            ...(analysis.entities!.amounts ?? []),
+            ...(analysis.entities!.names ?? []),
+          ]
+          return all.length > 0 ? (
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">
+                Entidades detectadas
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {all.map((entity, i) => (
+                  <Badge key={i} variant="secondary" className="text-xs">
+                    {entity}
+                  </Badge>
+                ))}
+              </div>
             </div>
-          </div>
-        )}
+          ) : null
+        })()}
       </div>
     )
   }
