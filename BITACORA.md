@@ -11,7 +11,7 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Mejoras UX: FileTypeBadge + fix overflow DocumentCard** (2026-07-01). Rama `feature/5.2-frontend-documents`.
+> Última actualización: **Fix ESLint CI (PR #1)** (2026-07-01). Rama `feature/5.2-frontend-documents`.
 > Proyecto de portafolio completado (Fases 0–5). Fase 6 = mejoras post-portafolio.
 
 ---
@@ -53,6 +53,39 @@ de su contenido mínimo y el truncado no tiene efecto.
 3. **WRITE_ROLES centralizado** — Creado `frontend/src/shared/lib/roles.ts` con las constantes `WRITE_ROLES`/`START_ROLES` y el helper `canWrite()`. Eliminadas 8 declaraciones locales duplicadas. Previene RBAC inconsistente en la UI si cambia la política de roles.
 4. **Polling con cota máxima** — `useDocument` detiene el polling de OCR tras 40 intentos (~2 min); `useWorkflowExecution` tras 48 intentos (~4 min). Previene polling eterno si el worker Celery muere sin escribir un estado terminal.
 5. **Código muerto audit eliminado** — `auditApi.getById`, `useAuditLog` y `auditKeys.detail` removidos. El backend expone el endpoint `GET /audit-logs/{id}/` pero el frontend nunca lo consumió; mantenerlo generaba deuda de tipos sin valor.
+
+---
+
+### 2026-07-01 — Fix ESLint CI: 5 errores bloqueaban la PR #1 (commit 89f5e86)
+
+Al abrir `feature/5.2-frontend-documents → main` el job `frontend / Lint` del CI de GitHub
+Actions falló con 5 errores de ESLint. Ninguno era lógica de negocio; todos eran
+configuración de linting o directivas desactualizadas.
+
+**ERR-A — `react-refresh/only-export-components` en archivos shadcn/ui**
+`badge.tsx`, `button.tsx` y `form.tsx` exportan constantes de variantes
+(`buttonVariants`, `badgeVariants`, `FormFieldContext`) junto a componentes. La regla de
+Vite lo reporta porque mezclar exportaciones de componentes y no-componentes en el mismo
+archivo interfiere con Hot Module Replacement. Solución: override en `eslint.config.js`
+deshabilitando la regla para `src/components/ui/**/*.{ts,tsx}` — son archivos generados
+por shadcn/ui, no código de la aplicación.
+
+**ERR-B — `@typescript-eslint/no-unused-vars` — variable `_omit`**
+En `documents/api.ts`, la destructuración `const { onUploadProgress: _omit, ...queryParams }`
+usaba `_omit` para excluir el campo del spread. La regla no reconocía la convención de
+prefijo `_` como "variable intencionalmente no usada". Solución: renombrar a `_` (nombre
+mínimo) y añadir `varsIgnorePattern: '^_'` globalmente en `eslint.config.js`.
+
+**ERR-C — `react-hooks/set-state-in-effect` en `ProtectedRoute`**
+El React Compiler eslint plugin marcaba `setRestorationAttempted(true)` como `setState`
+síncrono dentro de un `useEffect`. El patrón es intencional (decisión de diseño #33 —
+bootstrap secuencial: `getMe()` imperativo antes de renderizar `<Outlet>`). Solución:
+`// eslint-disable-next-line react-hooks/set-state-in-effect` en la línea específica.
+
+**ERR-D — Directiva `eslint-disable` obsoleta en `WorkflowTemplateForm`**
+Un `// eslint-disable-next-line react-hooks/exhaustive-deps` en la línea 94 ya no
+correspondía a ningún warning activo. ESLint lo reporta como "unused directive". Solución:
+eliminar la directiva.
 
 ---
 

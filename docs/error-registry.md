@@ -5,7 +5,7 @@
 > auditorías de cada fase.
 >
 > Uso principal: referencia histórica y fuente para `docs/ai-agent-guide.md`.
-> Última actualización: 2026-07-01. Errores registrados: ERR-001 a ERR-056.
+> Última actualización: 2026-07-01. Errores registrados: ERR-001 a ERR-060.
 
 ---
 
@@ -14,13 +14,14 @@
 | Categoría | Errores |
 |---|---|
 | `TYPE_CONTRACT` | ERR-005, ERR-019, ERR-020, ERR-022, ERR-023, ERR-025, ERR-037, ERR-038, ERR-039, ERR-040, ERR-041, ERR-044, ERR-046, ERR-047, ERR-048, ERR-049, ERR-050 |
-| `REACT_STATE` | ERR-015, ERR-016, ERR-021, ERR-026, ERR-045 |
+| `REACT_STATE` | ERR-015, ERR-016, ERR-021, ERR-026, ERR-045, ERR-059 |
 | `ASYNC_CELERY` | ERR-008, ERR-009, ERR-012, ERR-013, ERR-014, ERR-017, ERR-018 |
 | `ENVELOPE` | ERR-010, ERR-039, ERR-040, ERR-041, ERR-042 |
 | `MIGRATION` | ERR-002, ERR-006, ERR-043 |
 | `DEPENDENCY` | ERR-004, ERR-028, ERR-029, ERR-030, ERR-031, ERR-033, ERR-034, ERR-035, ERR-036, ERR-055 |
 | `POLLING` | ERR-024, ERR-052 |
-| `DEAD_CODE` | ERR-003, ERR-007, ERR-032, ERR-051, ERR-053 |
+| `ESLINT_CONFIG` | ERR-057, ERR-058 |
+| `DEAD_CODE` | ERR-003, ERR-007, ERR-032, ERR-051, ERR-053, ERR-060 |
 | `GITIGNORE` | ERR-001, ERR-056 |
 | `RBAC` | ERR-027 |
 | `N_PLUS_1` | ERR-011 |
@@ -1140,3 +1141,83 @@
 **Solución aplicada:** `lib/` sustituido por `backend/lib/` y `lib64/` por `backend/lib64/` en el `.gitignore` raíz, limitando el patrón exclusivamente al subdirectorio backend donde reside el virtualenv Python.
 
 **Commit de corrección:** `76f0f8f`
+
+---
+
+## ERR-057: `react-refresh/only-export-components` en archivos generados por shadcn/ui
+
+| Campo | Valor |
+|---|---|
+| Fecha | 2026-07-01 |
+| Fase | Post-portafolio / CI |
+| Severidad | MEDIA |
+| Categoría | `ESLINT_CONFIG` |
+| Archivo(s) afectado(s) | `frontend/src/components/ui/badge.tsx:36`, `button.tsx:56`, `form.tsx:170` |
+
+**Descripción:** El job `frontend / Lint` del CI falló porque los archivos shadcn/ui exportan constantes de variantes (`buttonVariants`, `badgeVariants`, `FormFieldContext`) en el mismo módulo que componentes React. La regla `react-refresh/only-export-components` del plugin de Vite lo reporta como error porque mezclar exportaciones de componentes y no-componentes en el mismo archivo puede interferir con Hot Module Replacement.
+
+**Causa raíz:** Los archivos de shadcn/ui son generados automáticamente y siguen su propia convención de diseño (export de variantes junto al componente). El `eslint.config.js` no tenía override para este directorio, por lo que la regla se aplicaba indiscriminadamente a código que no pertenece a la aplicación.
+
+**Solución aplicada:** Override en `frontend/eslint.config.js` que deshabilita `react-refresh/only-export-components` para `src/components/ui/**/*.{ts,tsx}`.
+
+**Commit de corrección:** `89f5e86`
+
+---
+
+## ERR-058: `@typescript-eslint/no-unused-vars` no reconocía la convención de prefijo `_`
+
+| Campo | Valor |
+|---|---|
+| Fecha | 2026-07-01 |
+| Fase | Post-portafolio / CI |
+| Severidad | MEDIA |
+| Categoría | `ESLINT_CONFIG` |
+| Archivo(s) afectado(s) | `frontend/src/features/documents/api.ts:38` |
+
+**Descripción:** La variable `_omit` en la destructuración `const { onUploadProgress: _omit, ...queryParams }` fue reportada como unused. El propósito era excluir `onUploadProgress` del spread `queryParams` sin consumirlo; la convención de prefijo `_` para variables intencionalmente no usadas no estaba configurada en el linter.
+
+**Causa raíz:** El `eslint.config.js` no tenía configurado `varsIgnorePattern` en la regla `@typescript-eslint/no-unused-vars`, por lo que el prefijo `_` no se reconocía como indicador de variable descartada a propósito.
+
+**Solución aplicada:** (1) Renombrar `_omit` a `_`. (2) Añadir `varsIgnorePattern: '^_'` a la configuración global de `@typescript-eslint/no-unused-vars` en `eslint.config.js`.
+
+**Commit de corrección:** `89f5e86`
+
+---
+
+## ERR-059: `react-hooks/set-state-in-effect` en `ProtectedRoute` — patrón intencional sin suprimir
+
+| Campo | Valor |
+|---|---|
+| Fecha | 2026-07-01 |
+| Fase | Post-portafolio / CI |
+| Severidad | MEDIA |
+| Categoría | `REACT_STATE` |
+| Archivo(s) afectado(s) | `frontend/src/shared/components/ProtectedRoute.tsx:28` |
+
+**Descripción:** El React Compiler eslint plugin reportó `setRestorationAttempted(true)` como `setState` síncrono dentro de un `useEffect`. El warning es técnicamente correcto desde la perspectiva del plugin, pero el patrón es intencional: la decisión de diseño #33 requiere un bootstrap secuencial donde `getMe()` imperativo se ejecuta y setea el flag antes de renderizar `<Outlet>`. Un hook declarativo (`useMe()`) introduciría race condition con el flag `restorationAttempted`.
+
+**Causa raíz:** El patrón de bootstrap secuencial (correcto en este contexto) no tenía directiva de supresión. Al añadir el plugin de React Compiler al CI, el warning pasó a ser error bloqueante.
+
+**Solución aplicada:** `// eslint-disable-next-line react-hooks/set-state-in-effect` en la línea específica, con comentario explicativo que referencia la decisión de diseño #33.
+
+**Commit de corrección:** `89f5e86`
+
+---
+
+## ERR-060: Directiva `eslint-disable` obsoleta en `WorkflowTemplateForm`
+
+| Campo | Valor |
+|---|---|
+| Fecha | 2026-07-01 |
+| Fase | Post-portafolio / CI |
+| Severidad | BAJA |
+| Categoría | `DEAD_CODE` |
+| Archivo(s) afectado(s) | `frontend/src/features/workflows/components/WorkflowTemplateForm.tsx:94` |
+
+**Descripción:** Un comentario `// eslint-disable-next-line react-hooks/exhaustive-deps` en la línea 94 ya no correspondía a ningún warning activo en ese punto del código. ESLint detecta las directivas que no suprimen ningún error real y las reporta como "unused directive", lo que convierte el aviso en error de CI.
+
+**Causa raíz:** Una refactorización anterior eliminó o movió la dependencia problemática del `useEffect` sin quitar la directiva de supresión que ya había dejado de ser necesaria.
+
+**Solución aplicada:** Eliminar la directiva obsoleta.
+
+**Commit de corrección:** `89f5e86`
