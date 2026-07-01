@@ -2613,6 +2613,397 @@ Justificación del orden:
 
 ---
 
+## Fase 6 — Mejoras post-portafolio
+
+**Objetivo:** el proyecto ya está "completo" como portafolio (Fases 0–5, backend + frontend +
+CI/CD + deploy + observabilidad básica). Fase 6 NO cierra un producto: es un backlog priorizado
+de mejoras donde cada sub-fase demuestra una competencia de ingeniería distinta y cierra deuda
+técnica consciente registrada en Fase 5. A diferencia de las fases anteriores, **Fase 6 no es
+secuencial-obligatoria**: cada sub-fase es un incremento independiente, elegible por su valor de
+portafolio en el momento. Se implementan de a una, con tests en verde antes de avanzar (regla
+general #1).
+
+**Estimación global:** indefinida (backlog). Cada sub-fase estima su propia complejidad (S/M/L).
+Meta de cobertura backend: mantener ≥ 95% (gate de CI de Fase 5.4). El frontend suma tests Vitest;
+6.5 introduce E2E (Playwright), contados aparte.
+
+**Métricas de partida (fin de Fase 5, 2026-07-01):** ~526 tests backend (95% cobertura) + 169
+tests frontend. Todo el CI en verde. Apps de dominio activas: core, organizations, authentication,
+permissions, audit, documents, workflows, search, notifications (billing dormido).
+
+**Invariantes que Fase 6 respeta sin excepción (CLAUDE.md §2–16):** NUNCA microservicios; separación
+models/services/selectors/api; toda entidad de dominio nueva hereda `BaseModel` + FK obligatoria a
+`Organization`; selectors reciben `organization` explícito; auditoría desde services; soft delete en
+entidades críticas; `transaction.atomic()` en services multi-tabla; side-effects vía
+`transaction.on_commit`; prevención de N+1; índices compuestos con `organization` primero; tests
+contra PostgreSQL real con test explícito de aislamiento de tenant.
+
+**Mapa de sub-fases (deuda que cierra + skill que demuestra):**
+
+| Sub-fase | Área | Cierra deuda | Skill de portafolio | Toca BE | Toca FE | Toca infra | Compl. |
+|----------|------|--------------|---------------------|:---:|:---:|:---:|:---:|
+| 6.1 | JWT en cookies httpOnly | #28 | Seguridad de auth / XSS-CSRF | ✅ | ✅ | — | M |
+| 6.2 | Enriquecimiento documental (thumbnails + texto Office) | Diferidos #3, #4 | Pipeline async de media | ✅ | ✅ | — | M |
+| 6.3 | Notificaciones in-app en tiempo real | #34, diferido notif. | Realtime (SSE) + entrega exactly-once | ✅ | ✅ | — | L |
+| 6.4 | Observabilidad avanzada | Diferidos #5, #6 | SRE / métricas / monitoreo | ✅ | — | ✅ | M |
+| 6.5 | Madurez de frontend (paginación, i18n, dark mode, E2E) | #38, diferidos i18n/dark/E2E | Frontend profesional + E2E | — | ✅ | — | M |
+| 6.6 | `apps/billing` — planes, suscripciones y cuotas | Skeleton dormido | Modelado de dominio SaaS + Stripe | ✅ | ✅ | — | L |
+| 6.7 | Staging + GitOps + backups gestionados/PITR | Diferidos #7, #9 | DevOps / SRE / DR | ✅ | ✅ | ✅ | L |
+
+### Decisiones globales de Fase 6 (cerradas — no re-discutir durante la implementación)
+
+1. **Cada sub-fase es un incremento independiente y mergeable por sí solo.** No hay "gran refactor"
+   ni rediseño transversal. Se prefiere evolución incremental sobre big-bang (principio de diseño
+   del proyecto).
+2. **Ninguna sub-fase relaja las reglas de CLAUDE.md.** Si una mejora exigiera romper una invariante
+   (p. ej. query sin filtro de tenant, lógica en view), se rediseña o se descarta. La única excepción
+   tenant-agnóstica permitida sigue siendo la ya justificada (`cleanup_orphan_blobs`, decisión #21);
+   Fase 6 no añade excepciones nuevas salvo que se documenten como decisión cerrada explícita.
+3. **`apps/billing` es la ÚNICA app de dominio nueva de Fase 6** (6.6). El resto extiende apps
+   existentes. No se crean apps por conveniencia.
+4. **Sin websockets si SSE resuelve el caso.** El realtime de 6.3 se resuelve con la herramienta más
+   simple capaz de cumplir el requisito real (server→client unidireccional). WebSockets/Channels solo
+   si aparece un caso bidireccional real, que hoy no existe.
+5. **El backend sigue siendo la única autoridad de RBAC y de cuotas.** El frontend puede añadir hints
+   de UX (6.5), pero jamás reemplaza la validación del backend (respeta decisión #36).
+
+---
+
+### 6.1 — JWT en cookies httpOnly (endurecimiento de autenticación)
+
+**Objetivo.** Migrar el almacenamiento de tokens desde `accessToken` en memoria + `refreshToken` en
+`localStorage` (decisión #28) a un esquema resistente a XSS: refresh token en cookie `HttpOnly`
+`Secure` `SameSite`, cerrando el trade-off de seguridad documentado como deuda de Fase 6.
+
+**Motivación.** Un XSS hoy puede robar el `refreshToken` de `localStorage` y mantener sesión
+indefinida. Es la deuda de seguridad de mayor severidad del proyecto y una mejora que cualquier
+revisor senior busca en un SaaS.
+
+**Decisiones arquitectónicas:**
+
+1. **¿Qué token va en cookie?** Solo el **refresh** en cookie `HttpOnly Secure SameSite=Strict`,
+   path acotado al endpoint de refresh/logout; el **access** sigue en memoria (Zustand). *Razón:*
+   minimiza superficie CSRF (el access no viaja como cookie ambiental en cada request; se manda en
+   `Authorization: Bearer`), y el refresh —que es el objetivo valioso del XSS— queda inaccesible a JS.
+   Alternativa evaluada: ambos tokens en cookie → obliga a protección CSRF en TODOS los endpoints
+   mutantes; se descarta por mayor superficie.
+2. **Protección CSRF del endpoint de refresh.** `SameSite=Strict` + patrón double-submit token
+   (cookie no-HttpOnly + header `X-CSRF-Token`) en el POST de refresh y logout.
+3. **Rotación y blacklist.** El refresh rotativo + blacklist (ya activos, SimpleJWT) se mantienen; el
+   nuevo refresh se re-emite como cookie en cada rotación. Logout invalida en blacklist **y** borra la
+   cookie (`Set-Cookie` expirado) desde el backend.
+4. **CORS/entornos.** En prod Nginx sirve mismo origen (sin CORS). En dev (Vite:5173 ≠ API:8000)
+   proxear `/api` desde Vite dev-server para operar en mismo origen y no relajar `SameSite` en dev.
+
+**Entregables:**
+- Backend: vistas custom de `login`/`refresh`/`logout` que setean/leen/borran la cookie (subclases de
+  las de SimpleJWT; lógica en `auth_service`, view solo orquesta). Settings de cookie por entorno
+  (`python-decouple`). Middleware/util que lee el refresh de cookie.
+- Frontend: `api-client.ts` deja de leer/escribir `refreshToken` de `localStorage`; el interceptor de
+  refresh (cola `isRefreshing`+`failedQueue`, decisión #29) llama al endpoint confiando en la cookie;
+  `useAuthStore` deja de persistir el refresh. Manejo del CSRF token.
+- Tests: backend — login setea cookie `HttpOnly`; refresh sin cookie → 401; refresh con cookie válida
+  rota y re-setea; logout borra cookie + blacklist; aislamiento (cookie de org A no da acceso a org B).
+  Frontend — cola de refresh sigue garantizando 1 solo refresh para N 401 concurrentes vía cookie.
+
+**Complejidad:** M. **Riesgo:** medio — rollout con feature-flag recomendado.
+
+---
+
+### 6.2 — Enriquecimiento documental: thumbnails + extracción de texto Office
+
+**Objetivo.** Extender el pipeline async de documentos (Celery, endurecido en Fase 4) con: (a)
+generación de thumbnail/preview y (b) extracción de texto de ficheros Office (docx/xlsx) para
+alimentar la búsqueda.
+
+**Motivación.** Thumbnails dan un salto visual inmediato en la demo. La extracción Office cierra el
+hueco de OCR de Fase 4 (decisión #12: Office → `ocr_status=skipped`), haciendo documentos ofimáticos
+buscables por su contenido.
+
+**Decisiones arquitectónicas:**
+
+1. **Almacenamiento del thumbnail.** Objeto derivado en el mismo storage (MinIO/S3) vía
+   `StorageService`. Columnas reales `thumbnail_status` (pending/processing/ready/skipped/failed) y
+   `thumbnail_key` en `Document` — patrón `ocr_status` (decisión #13). Una sola migración.
+2. **Formatos que generan thumbnail.** PDF (primera página vía `pdf2image`, ya instalado) e imágenes
+   (`Pillow`). Office/otros → `skipped`.
+3. **Extracción Office.** Extender `ocr_service` (no crear service nuevo) con handlers
+   `python-docx`/`openpyxl`. Resultado escrito en `ocr_content` con `save(update_fields=["ocr_content"])`,
+   disparando el signal FTS (decisión #14). Elimina el `skipped` para Office; actualiza la decisión #12.
+4. **Task separada para thumbnail.** `generate_thumbnail(document_id)` — autoretry con `TransientError`,
+   encolada desde `document_service.create_document` vía `transaction.on_commit`. Lógica en
+   `thumbnail_service` (CLAUDE.md §12). La extracción Office va dentro del `process_ocr` existente.
+
+**Entregables:**
+- Backend: migración `thumbnail_status`/`thumbnail_key`; `thumbnail_service`; task `generate_thumbnail`;
+  handlers docx/xlsx en `ocr_service`; endpoint `POST /documents/{id}/regenerate-thumbnail/` (202);
+  `thumbnail_key` como presigned URL read-only en `DocumentSerializer`. `cleanup_orphan_blobs` extendido
+  para blobs de thumbnail.
+- Frontend: `DocumentCard`/`DocumentListPage` con miniatura (fallback a `FileTypeBadge`);
+  `ThumbnailStatusBadge` con polling; preview ampliado en `DocumentDetailPage`.
+- Tests: genera thumbnail PDF/imagen; Office → skipped thumbnail pero texto extraído y buscable;
+  failure → `failed`; aislamiento de tenant; `cleanup` no borra thumbnails vivos.
+
+**Complejidad:** M. **Dependencias externas:** `Pillow`, `python-docx`, `openpyxl` (pip).
+
+---
+
+### 6.3 — Notificaciones in-app en tiempo real + entrega exactly-once
+
+**Objetivo.** Sumar canal `in_app` al subsistema de notificaciones (Fase 5.7, hoy solo email), con
+entrega en tiempo real al frontend, ampliar los eventos notificados (reject/cancel/complete) y saldar
+la deuda exactly-once (decisión #34).
+
+**Motivación.** Diferenciador visual más fuerte: realtime UX + mensajería robusta. Cierra las deudas
+del canal in-app diferido, eventos de workflow adicionales y la semántica at-least-once (#34).
+
+**Decisiones arquitectónicas:**
+
+1. **Transporte realtime: SSE.** El caso es estrictamente server→client; SSE funciona sobre HTTP/1.1,
+   atraviesa Nginx con `proxy_buffering off`, no requiere ASGI/Django Channels. WebSockets/Channels se
+   descartan (sobre-ingeniería para flujo unidireccional — decisión global #4).
+2. **Modelo de datos.** Extender `Notification` existente con `read_at` (nullable) y ampliar `channel`
+   choices con `in_app`. Choice `processing` para exactly-once. Índice parcial
+   `idx_notifications_org_recipient_unread` con `condition=Q(read_at__isnull=True)`.
+3. **Exactly-once (#34).** Estado `processing` + sweep task Beat que re-encola notificaciones colgadas
+   en `processing` más de N minutos. Ciclo: pending → processing → sent con timeout. Requiere migración
+   (nuevo choice) + task nueva.
+4. **Eventos ampliados.** `workflow_service` emite notificaciones en reject/cancel/complete vía
+   `transaction.on_commit` (patrón Fase 5.7). Un `notification_service.notify_*` por evento.
+5. **Autorización del stream SSE.** Autenticación por JWT (Bearer); filtro siempre por
+   `request.organization` + `request.user`. Aislamiento de tenant en el canal realtime = requisito de
+   seguridad; se testea explícitamente.
+
+**Entregables:**
+- Backend: migración `Notification` (nuevos choices, `read_at`, índice parcial); `notification_service`
+  canal in-app + eventos reject/cancel/complete; sweep task Beat; endpoints `GET /api/v1/notifications/`
+  (lista paginada con `unread_count` en `meta`), `POST /api/v1/notifications/{id}/read/`,
+  `POST /api/v1/notifications/read-all/`, `GET /api/v1/notifications/stream/` (SSE).
+- Frontend: `NotificationBell` en Header con badge; hook `useNotifications` + suscripción SSE;
+  `NotificationsPage`; toasts para eventos entrantes; reconexión con backoff del `EventSource`.
+- Tests: notificación in-app en cada evento de workflow; `unread_count` correcto; aislamiento de tenant
+  en lista y stream SSE; sweep re-encola `processing` colgadas; no reenvía `sent`; on_commit.
+
+**Complejidad:** L. **Riesgo:** medio-alto — SSE detrás de Nginx requiere `proxy_buffering off` +
+timeouts largos. Documentar en `nginx.conf`. Considerar worker async/gthread dedicado para el endpoint
+SSE o límite de conexiones concurrentes.
+
+---
+
+### 6.4 — Observabilidad avanzada (métricas + scheduler editable + monitoreo de workers)
+
+**Objetivo.** Elevar la observabilidad de Fase 5.6 (Sentry + JSON logs + health check) a métricas
+cuantitativas (Prometheus + Grafana), schedules editables desde el admin (`django-celery-beat`) y
+monitoreo de la cola Celery (Flower).
+
+**Motivación.** Demuestra madurez de SRE: "¿cuánto, cuán rápido, cuánta cola?" en vez de solo "¿falló
+algo?". Cierra los diferidos #5 y #6 de Fase 5.
+
+**Decisiones arquitectónicas:**
+
+1. **Instrumentación.** `django-prometheus` para métricas HTTP/DB automáticas + métricas de negocio
+   custom emitidas **desde los services** (no desde views), coherente con "auditoría desde services".
+   Endpoint `/metrics` protegido, no público.
+2. **Sin label `organization_id` en métricas custom.** Cardinalidad alta = anti-patrón en Prometheus
+   y potencial fuga de forma de datos por tenant. Métricas agregadas a nivel plataforma; el desglose
+   por tenant vive en la auditoría/DB.
+3. **Scheduler editable.** Migrar de `CELERY_BEAT_SCHEDULE` estático (decisión #17) a
+   `django-celery-beat` (`DatabaseScheduler`). Migración de datos que siembra los schedules actuales.
+   Documenta el cambio de la decisión #17.
+4. **Flower** detrás de Nginx con auth básica, no expuesto públicamente sin protección.
+5. **Grafana.** Dashboards versionados como JSON en el repo (`ops/grafana/`).
+
+**Entregables:**
+- Backend: `django-prometheus` + middleware; helper de métricas custom en services; `/metrics`
+  protegido; `django-celery-beat` con `DatabaseScheduler` + migración de siembra.
+- Infra: servicios `prometheus`, `grafana`, `flower` en compose de prod; `prometheus.yml`; dashboards
+  JSON; rutas protegidas en `nginx.conf`.
+- Docs: `docs/observability.md` (qué métrica significa qué, cómo leer los dashboards).
+- Tests: `/metrics` expone contadores custom; no público sin auth; service incrementa el contador
+  correcto; schedules sembrados existen tras migrar.
+
+**Complejidad:** M. **Dependencias externas:** `django-prometheus`, `django-celery-beat`, `flower`
+(pip); imágenes `prom/prometheus`, `grafana/grafana` (infra).
+
+---
+
+### 6.5 — Madurez de frontend: paginación, i18n, dark mode y E2E
+
+**Objetivo.** Cerrar los pendientes de calidad del frontend: paginación en listas de workflows
+(decisión #38), internacionalización, modo oscuro y suite E2E (Playwright).
+
+**Motivación.** Convierte el frontend de "funcional" a "profesional". La suite E2E protege los flujos
+críticos end-to-end que los tests unitarios no cubren.
+
+**Decisiones arquitectónicas:**
+
+1. **Paginación (#38).** Conectar `<Pagination>` en `WorkflowTemplatesPage`/`WorkflowExecutionsPage`
+   al backend usando `meta.count/next/previous/page/page_size` del envelope. Trabajo pequeño de cierre.
+2. **i18n.** `react-i18next` con `es`/`en` como locales iniciales; extraer strings a catálogos.
+3. **Dark mode.** Estrategia `class` de Tailwind + tokens de tema de shadcn/ui (CSS variables); toggle
+   persistido en `localStorage` con respeto a `prefers-color-scheme`.
+4. **E2E.** Playwright. Job separado en CI que levanta backend + frontend (compose) y corre flujos
+   críticos: login, upload, búsqueda, avanzar workflow, auditoría, notificación in-app. Job paralelo
+   a unit, no bloqueante (más lento/frágil).
+5. **Hints de RBAC en UI (#36).** Opcional y solo como UX-hint (deshabilitar/ocultar botones). El
+   backend sigue siendo la única autoridad (decisión #36 respetada).
+
+**Entregables:**
+- Frontend: `<Pagination>` conectado en listas de workflows; `react-i18next` + catálogos; dark mode
+  toggle; suite Playwright con flujos críticos; (opcional) helpers de hint RBAC en `shared/lib/roles`.
+- CI: job `e2e` en `ci.yml`; artefactos de trazas en fallo.
+- Tests: Vitest — interacciones de paginación, cambio de idioma, toggle de tema; Playwright — flujos e2e.
+
+**Complejidad:** M. **Dependencias externas:** `react-i18next`, `i18next` (npm); `@playwright/test` (npm).
+**Nota:** i18n del backend (mensajes de error localizados) queda FUERA de 6.5.
+
+---
+
+### 6.6 — `apps/billing` — planes, suscripciones y cuotas por organización
+
+**Objetivo.** Despertar el skeleton `apps/billing` y modelar el corazón monetario de un SaaS: catálogo
+de planes, suscripción por organización, cuotas/límites por plan y enforcement en los services de
+dominio, con integración de pagos (Stripe) en modo test.
+
+**Motivación.** Mayor valor de portafolio de Fase 6: modelado de dominio SaaS real, enforcement
+transversal de límites multi-tenant e integración con un proveedor de pagos.
+
+**Decisiones arquitectónicas:**
+
+1. **Modelado:**
+   - `Plan` = catálogo global (nombre, precio, límites: `max_documents`, `max_storage_bytes`,
+     `max_users`, flags de features). **Sin FK a `Organization`** — es raíz de catálogo, no dato de
+     tenant. Excepción documentada como decisión cerrada (análoga a `organizations`).
+   - `Subscription(BaseModel)` **CON FK obligatoria a `Organization`** (una activa por org), `plan`,
+     `status` (trialing/active/past_due/canceled), `current_period_end`, `stripe_customer_id`,
+     `stripe_subscription_id`. Soft delete.
+   - `Invoice(BaseModel)` con FK org (snapshot; detalle vive en Stripe).
+   - Uso/cuota calculado con **selectors** (`count`/`sum` de documentos/storage por org), no contador
+     denormalizado — evita drift. Optimización lazy si `EXPLAIN ANALYZE` lo requiere.
+2. **Enforcement de cuotas en services.** `document_service.create_document` consulta
+   `quota_service.assert_can_create_document(org)` antes de crear. Excede cuota →
+   `ApplicationError` tipado (`QUOTA_EXCEEDED`, 402/403) con envelope estándar. NUNCA en views.
+3. **Integración Stripe.** Modo test (claves por `python-decouple`). Webhooks verifican firma;
+   delegan en `billing_service`. Procesamiento idempotente por `stripe_event_id`. El webhook es la
+   única entrada a estados privilegiados de `Subscription` (patrón decisión #8).
+4. **Auditoría.** Todo cambio de plan/suscripción/estado genera `AuditLog` desde el service.
+
+**Entregables:**
+- Backend: modelos `Plan`, `Subscription`, `Invoice` + migraciones; `billing_service`
+  (suscribir, cambiar plan, procesar webhook); `quota_service` (assert_* de cuotas);
+  `billing_selector` (uso por org, tenant-safe); endpoints `GET /api/v1/billing/subscription/`,
+  `GET /api/v1/billing/usage/`, `POST /api/v1/billing/checkout-session/`,
+  `POST /api/v1/billing/webhook/` (firma verificada, sin auth JWT). Enforcement en
+  `document_service` (y donde aplique).
+- Frontend: `BillingPage` (plan actual, uso vs. límites con barras de progreso, upgrade);
+  banners de "cerca del límite"/"límite alcanzado"; integración Stripe Checkout.
+- Tests: cuota bloquea creación al exceder límite; aislamiento de tenant en uso y suscripción;
+  webhook idempotente; firma inválida → rechazo; cambio de plan audita; `transaction.atomic`.
+
+**Complejidad:** L. **Dependencias externas:** `stripe` (pip); cuenta Stripe modo test.
+**Riesgo:** medio — verificación de firma y idempotencia de webhooks son requisitos de seguridad
+no negociables.
+
+---
+
+### 6.7 — Staging + GitOps + backups gestionados / PITR
+
+**Objetivo.** Profesionalizar la operación: entorno de **staging** que espeja prod, deploy
+**GitOps automático a staging** en cada merge a `main` (prod sigue manual, decisión Fase 5.5),
+y backups gestionados con capacidad de **Point-In-Time Recovery**.
+
+**Motivación.** Demuestra DevOps/SRE y disaster recovery: de "hago un dump y rezo" a "puedo
+restaurar a cualquier minuto y valido restauraciones". Cierra los diferidos #7 y #9 de Fase 5.
+
+**Decisiones arquitectónicas:**
+
+1. **Staging.** Misma imagen y `docker-compose.prod.yml` parametrizado por `.env.staging`; datos
+   sintéticos, jamás datos reales de prod.
+2. **GitOps.** Merge a `main` con CI verde → deploy automático a staging. Prod permanece en
+   `workflow_dispatch` manual (para no romper la demo en vivo). Promoción staging→prod por
+   tag/dispatch.
+3. **PITR.** `pgBackRest` (o `WAL-G`) para backup full + WAL archiving → PITR, almacenado en
+   S3/objeto. Alternativa `pg_dump` mejorado: más simple pero sin PITR. Se recomienda pgBackRest
+   por el valor de portafolio.
+4. **Validación de restauración.** Job programado que restaura el último backup en entorno efímero y
+   corre smoke test — "un backup no probado no es un backup".
+
+**Entregables:**
+- Infra: `.env.staging.example`; compose parametrizado; `deploy.yml` con job de staging automático +
+  promoción manual a prod; configuración `pgBackRest`/`WAL-G` + bucket de backups; nginx de staging.
+- Ops: script/job de validación de restauración; `docs/disaster-recovery.md` (runbook DR).
+- Validación: pipeline de staging despliega en verde; restauración PITR end-to-end probada en el job
+  de validación.
+
+**Complejidad:** L. **Dependencias externas:** `pgBackRest` o `WAL-G`; bucket S3/objeto para WAL;
+segundo entorno (staging VPS o mismo VPS con red separada).
+
+---
+
+### Orden de implementación recomendado
+
+Fase 6 es un backlog: el orden es una guía por dependencias, riesgo y valor de portafolio.
+
+```
+6.1 (cookies httpOnly)  ──▶  6.2 (enriquecimiento docs)  ──▶  6.3 (notif. realtime)  ──▶  6.6 (billing)
+   (seguridad, bajo riesgo)      (extiende pipeline Fase 4)       (diferenciador UX)         (dominio nuevo)
+        │                              │                               │                          │
+        └──────────────┬───────────────┘                               │                          │
+                       ▼                                               ▼                          │
+                6.4 (observabilidad)  ◀── conviene antes de billing (medir cuotas/pagos)          │
+                       │                                                                           │
+                       └──────────────▶  6.5 (madurez frontend)  ◀───────────────────────────────┘
+                                                    │
+                                                    └──▶  6.7 (staging + GitOps + PITR)
+```
+
+**Justificación:**
+- **6.1 primero:** cierra la deuda de seguridad de mayor severidad (#28) antes de exponer más
+  superficie. Independiente y con feature-flag de rollout.
+- **6.2 temprano:** payoff visual inmediato; reutiliza el pipeline Celery de Fase 4; no depende de
+  nada nuevo.
+- **6.3 antes de 6.6:** la mensajería madura (exactly-once) que billing querrá usar para avisos de
+  pago/cuota ya estará lista.
+- **6.4 antes de 6.6:** medir es prerequisito para operar billing con confianza (tasas de webhook,
+  latencias, cola).
+- **6.6 en la segunda mitad:** se beneficia de observabilidad (6.4) y mensajería madura (6.3).
+- **6.5 interleaveable:** la paginación (deuda pequeña) puede ir antes; E2E idealmente después de
+  que billing y notificaciones realtime existan para cubrir esos flujos.
+- **6.7 al final (capstone):** staging y PITR consumen todo lo anterior; tiene sentido cuando hay
+  algo estable y valioso que proteger.
+
+### Riesgos principales
+
+1. **Migración de tokens rompe la sesión de todos los usuarios (6.1).** Un error en la cookie de
+   refresh o CSRF deja al frontend sin poder renovar sesión. **Mitigación:** feature-flag, tests
+   exhaustivos del interceptor y del ciclo login/refresh/logout, verificar que la cola de refresh
+   (decisión #29) sigue garantizando un solo refresh para N 401 concurrentes.
+2. **Stream SSE agota los workers de Gunicorn (6.3).** Conexiones long-lived en workers sync bloquean
+   el pool. **Mitigación:** worker async/gthread dedicado o límite de conexiones; `proxy_buffering off`
+   + timeouts en Nginx; degradación a polling como fallback; test de aislamiento de tenant en el canal.
+3. **Webhooks de billing no verificados o no idempotentes corrompen el estado de suscripción (6.6).**
+   **Mitigación:** verificación obligatoria de firma de Stripe; procesamiento idempotente por
+   `stripe_event_id`; el webhook como única vía privilegiada a estados de `Subscription` (patrón
+   decisión #8); auditoría de todo cambio.
+
+### Lo que explícitamente queda FUERA de Fase 6 (Fase 7+ o descartado)
+
+- **Microservicios / división del monolito** — decisión permanente (CLAUDE.md §2). Nunca.
+- **Schemas de PostgreSQL separados por tenant** — aislamiento por `organization_id` en schema
+  compartido (CLAUDE.md §6). No se re-abre.
+- **Búsqueda con stemming o motor externo (Elasticsearch/OpenSearch)** — la FTS de PostgreSQL
+  (decisión #11) se mantiene.
+- **WebSockets bidireccionales / colaboración en tiempo real tipo Google Docs** — el realtime de 6.3
+  es unidireccional (SSE); WebSockets solo si aparece un caso bidireccional real.
+- **i18n del backend (mensajes de error localizados) y RTL** — 6.5 es i18n de UI.
+- **Multi-región / alta disponibilidad activo-activo / autoscaling** — single-VPS con staging (6.7).
+- **App móvil nativa / PWA offline** — fuera de alcance.
+- **SSO empresarial (SAML/OIDC), MFA/TOTP** — Fase 7 potencial.
+- **Data warehouse / analítica por tenant / reporting BI** — las métricas de 6.4 son operativas
+  (Prometheus agregado), no analítica de negocio.
+
+---
+
 ## Reglas generales para Claude Code en cada fase
 
 1. **Completar tests antes de avanzar** — no iniciar fase siguiente con tests en rojo
