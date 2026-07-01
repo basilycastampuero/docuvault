@@ -11,8 +11,18 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Bugs y mejoras en workflows** (2026-06-30). Rama `feature/5.2-frontend-documents`.
+> Última actualización: **Auditoría de código frontend** (2026-07-01). Rama `feature/5.2-frontend-documents`.
 > Proyecto de portafolio completado (Fases 0–5). Fase 6 = mejoras post-portafolio.
+
+---
+
+### 2026-07-01 — Auditoría de código frontend (post-testing)
+
+**[ALTA] Crash SearchPage:** `SearchResultSerializer` no incluía `ocr_status` en sus `fields`. `DocumentCard` pasaba `document.ocr_status` (undefined) al badge; `CONFIG[undefined]` es `undefined` → destructuración de `label` lanzaba TypeError con pantalla en blanco. Fix: campo añadido al serializer (`backend/apps/search/api/serializers.py`) + fallback defensivo `CONFIG[status] ?? { label: ..., className: ... }` en `OcrStatusBadge.tsx`.
+
+**[MEDIA] Tipo SearchResult:** `searchApi.search` tipaba los resultados como `Document[]` completo, pero el serializer devuelve un shape parcial (sin `checksum`, `metadata`, `ocr_content`) más el campo extra `rank`. Fix: nueva interfaz `SearchResult extends Omit<Document, 'checksum'|'metadata'|'ocr_content'> { rank: number }` en `shared/types/index.ts`; `search/api.ts` actualizado.
+
+**[MEDIA] Entidades IA invisibles:** La pestaña "Análisis IA" mostraba resumen y categoría pero nunca las entidades detectadas. El backend almacena `entities: { dates: [], amounts: [], names: [] }` (objeto), pero el frontend lo tipaba como `entities?: string[]`; la guarda `analysis.entities.length > 0` evaluaba `undefined > 0 = false` y silenciaba el bloque. Fix: `AiAnalysis.entities` corregido al tipo objeto real; rendering actualizado para aplanar las tres listas y mostrarlas como badges (`DocumentDetailPage.tsx`).
 
 ---
 
