@@ -103,7 +103,8 @@ export function DocumentVersionList({ document }: DocumentVersionListProps) {
     )
   }
 
-  const totalPages = data ? Math.ceil(data.meta.count / data.meta.page_size) : 1
+  const { count, page_size } = data?.meta ?? {}
+  const totalPages = count && page_size ? Math.ceil(count / page_size) : 1
 
   return (
     <div className="space-y-4">

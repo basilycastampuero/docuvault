@@ -28,12 +28,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Input } from '@/components/ui/input'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useAuthStore } from '@/features/auth/store'
 import { useWorkflowExecutions, useStartWorkflowExecution, useWorkflowTemplates } from '../hooks'
+import { useDocuments } from '@/features/documents/hooks'
 import { ExecutionStatusBadge } from '../components/ExecutionStatusBadge'
 
 const START_ROLES = ['super_admin', 'org_admin', 'supervisor', 'editor'] as const
@@ -44,7 +44,7 @@ function canStart(role: string | undefined): role is StartRole {
 }
 
 const startSchema = z.object({
-  document_id: z.string().uuid('ID de documento inválido'),
+  document_id: z.string().min(1, 'Selecciona un documento'),
   template_id: z.string().uuid('Selecciona una plantilla'),
 })
 type StartFormValues = z.infer<typeof startSchema>
@@ -56,6 +56,7 @@ export function WorkflowExecutionsPage() {
 
   const { data, isLoading } = useWorkflowExecutions()
   const { data: templatesData } = useWorkflowTemplates()
+  const { data: documentsData, isLoading: documentsLoading } = useDocuments()
   const startExecution = useStartWorkflowExecution()
 
   const form = useForm<StartFormValues>({
@@ -73,6 +74,7 @@ export function WorkflowExecutionsPage() {
   }
 
   const activeTemplates = templatesData?.items.filter((t) => t.is_active) ?? []
+  const documents = documentsData?.items ?? []
 
   return (
     <div className="space-y-6">
@@ -174,10 +176,35 @@ export function WorkflowExecutionsPage() {
                 name="document_id"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>ID del documento</FormLabel>
-                    <FormControl>
-                      <Input placeholder="UUID del documento" {...field} />
-                    </FormControl>
+                    <FormLabel>Documento</FormLabel>
+                    <Select
+                      onValueChange={field.onChange}
+                      value={field.value}
+                      disabled={documentsLoading}
+                    >
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue
+                            placeholder={
+                              documentsLoading ? 'Cargando documentos...' : 'Seleccionar documento'
+                            }
+                          />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {documents.length === 0 ? (
+                          <SelectItem value="_none" disabled>
+                            No hay documentos disponibles
+                          </SelectItem>
+                        ) : (
+                          documents.map((doc) => (
+                            <SelectItem key={doc.id} value={doc.id}>
+                              {doc.name} — {doc.status}
+                            </SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
                     <FormMessage />
                   </FormItem>
                 )}
