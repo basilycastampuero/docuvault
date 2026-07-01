@@ -77,6 +77,7 @@ export interface Document {
   status: DocumentStatus
   version: number
   ocr_status: OcrStatus
+  ocr_content: string
   tags: string[]
   metadata: Record<string, unknown>
   folder: string | null

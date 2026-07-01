@@ -275,6 +275,9 @@ export function DocumentDetailPage() {
             <TabsList>
               <TabsTrigger value="versions">Versiones</TabsTrigger>
               {canWrite && <TabsTrigger value="edit">Editar metadata</TabsTrigger>}
+              {document.ocr_content && (
+                <TabsTrigger value="ocr">Contenido OCR</TabsTrigger>
+              )}
               {!aiUnavailable && (
                 <TabsTrigger value="ai">
                   <BrainCircuit className="mr-1.5 h-3.5 w-3.5" />
@@ -304,6 +307,20 @@ export function DocumentDetailPage() {
               </TabsContent>
             )}
 
+            {document.ocr_content && (
+              <TabsContent value="ocr" className="mt-4">
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">Contenido extraído por OCR</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <pre className="text-sm whitespace-pre-wrap break-words text-muted-foreground font-sans">
+                      {document.ocr_content}
+                    </pre>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            )}
 
             {!aiUnavailable && (
               <TabsContent value="ai" className="mt-4">
