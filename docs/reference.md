@@ -1,7 +1,7 @@
 # SasVault — Referencia Técnica Exhaustiva
 
 Diccionario de consulta rápida: qué existe, dónde, qué recibe y qué devuelve.
-Última actualización: 2026-07-01.
+Última actualización: 2026-07-01. (secciones 13 y 14 añadidas; §2 completo con `organization_service` y `user_service`)
 
 ---
 
@@ -19,6 +19,8 @@ Diccionario de consulta rápida: qué existe, dónde, qué recibe y qué devuelv
 10. [Frontend — Componentes Clave](#10-frontend--componentes-clave)
 11. [Frontend — Stores (Zustand)](#11-frontend--stores-zustand)
 12. [Contrato Frontend-Backend](#12-contrato-frontend-backend)
+13. [Backend — Permission Classes](#13-backend--permission-classes)
+14. [Backend — Tasks Celery](#14-backend--tasks-celery)
 
 ---
 
@@ -441,6 +443,79 @@ Roles que pueden actuar en cualquier paso independientemente del `required_role`
 
 ---
 
+### `organization_service` — `backend/apps/organizations/services/organization_service.py`
+
+#### `create_organization`
+| Parámetro | Tipo |
+|---|---|
+| `name` | `str` |
+| `slug` | `str \| None` (opcional) |
+
+**Retorna:** `Organization`
+**Side effects:** persiste la organización. Auto-genera `slug = slugify(name)` si no se provee.
+**Excepciones:** `ConflictError(code="SLUG_TAKEN")` si ya existe una organización con ese slug.
+
+#### `update_organization`
+| Parámetro | Tipo |
+|---|---|
+| `organization` | `Organization` |
+| `name` | `str \| None` |
+| `settings` | `dict \| None` |
+
+**Retorna:** `Organization`
+**Nota:** `slug` es inmutable tras la creación; no se puede cambiar con este service.
+
+#### `deactivate_organization`
+| Parámetro | Tipo |
+|---|---|
+| `organization` | `Organization` |
+
+**Retorna:** `Organization` (con `is_active=False`)
+**Side effects:** pone `is_active=False`. No elimina la organización ni sus datos.
+
+---
+
+### `user_service` — `backend/apps/authentication/services/user_service.py`
+
+#### `create_user`
+| Parámetro | Tipo |
+|---|---|
+| `organization` | `Organization` |
+| `email` | `str` |
+| `role` | `str` (`UserRole`) |
+| `first_name` | `str` (default `""`) |
+| `last_name` | `str` (default `""`) |
+| `password` | `str \| None` |
+
+**Retorna:** `User`
+**Excepciones:** `ConflictError(code="EMAIL_TAKEN")` si el email ya existe; `ValidationError(code="INVALID_ROLE")` si el rol es `SUPER_ADMIN` (no se puede crear SUPER_ADMIN por API).
+
+#### `update_user`
+| Parámetro | Tipo |
+|---|---|
+| `organization` | `Organization` |
+| `user` | `User` (usuario a actualizar) |
+| `requesting_user` | `User` (quien ejecuta la acción) |
+| `first_name` | `str \| None` |
+| `last_name` | `str \| None` |
+| `role` | `str \| None` |
+
+**Retorna:** `User`
+**Excepciones:** `PermissionDenied(code="CANNOT_CHANGE_OWN_ROLE")` si `user == requesting_user` y se intenta cambiar el rol; `ValidationError(code="INVALID_ROLE")` si se intenta asignar `SUPER_ADMIN`.
+
+#### `deactivate_user`
+| Parámetro | Tipo |
+|---|---|
+| `organization` | `Organization` |
+| `user` | `User` (usuario a desactivar) |
+| `requesting_user` | `User` (quien ejecuta la acción) |
+
+**Retorna:** `None`
+**Side effects:** pone `is_active=False`. No es un soft-delete (no toca `deleted_at`).
+**Excepciones:** `PermissionDenied(code="CANNOT_DEACTIVATE_SELF")` si `user == requesting_user`.
+
+---
+
 ### `auth_service` — `backend/apps/authentication/services/auth_service.py`
 
 #### `login`
@@ -456,6 +531,84 @@ Roles que pueden actuar en cualquier paso independientemente del `required_role`
 #### `refresh_token_pair`
 **Parámetros:** `refresh_token: str`
 **Retorna:** `{"access": str, "refresh": str}`
+
+---
+
+### `ocr_service` — `backend/apps/documents/services/ocr_service.py`
+
+| Función | Parámetros | Retorno | Side Effects | Excepciones |
+|---|---|---|---|---|
+| `process` | `document: Document` | `None` | Descarga blob de MinIO/S3; escribe `ocr_content` + `ocr_status` en DB; emite `AuditLog` con `metadata={"via":"ocr"}`; guardar `ocr_content` dispara signal FTS (Phase 3.3) | `TransientError` en fallo de storage recuperable (timeout, error de red) — la task Celery reintenta; blobs permanentemente ausentes (`NoSuchKey`, 404) no relanzean: marcan `ocr_status=FAILED` y retornan |
+
+**Flujo de `ocr_status`:**
+- `PROCESSING` → `COMPLETED` (PDF/imagen, extracción exitosa)
+- `PROCESSING` → `SKIPPED` (mime distinto de `application/pdf`, `image/jpeg`, `image/png`)
+- `PROCESSING` → `FAILED` (blob ausente de forma permanente o error de extracción irrecuperable)
+
+**Notas:**
+- Idempotente: sobreescribe resultado anterior; seguro ante re-entrega de Celery.
+- Usa `settings.OCR_LANGUAGES` (Tesseract) y `settings.OCR_PDF_DPI` (pdf2image).
+- La actualización usa `save(update_fields=["ocr_content", "ocr_status", "updated_at"])` para no disparar señales innecesarias salvo la de FTS.
+
+---
+
+### `ai_service` — `backend/apps/documents/services/ai_service.py`
+
+| Función | Parámetros | Retorno | Side Effects | Excepciones |
+|---|---|---|---|---|
+| `analyze` | `document: Document` | `dict` (ver estructura abajo) | Escribe `document.metadata["ai_analysis"]` vía `save(update_fields=["metadata","updated_at"])`; emite `AuditLog` con `metadata={"via":"ai_analysis"}`; no reconstruye `search_vector` (update_fields excluye campos de texto) | `AIServiceUnavailableError` (503) si `ANTHROPIC_API_KEY` no está configurada; `ConflictError(code="AI_NO_CONTENT")` si el documento no tiene `ocr_content`; `TransientError` si la respuesta del modelo es malformada o en errores recuperables del SDK (`RateLimitError`, `APITimeoutError`, `APIConnectionError`) |
+
+**Estructura del dict devuelto por `analyze`:**
+```python
+{
+    "summary": str,                    # resumen en prosa del documento
+    "entities": {
+        "dates":   list[str],          # fechas detectadas
+        "amounts": list[str],          # importes o cantidades monetarias
+        "names":   list[str],          # nombres de personas u organizaciones
+    },
+    "suggested_category": str,         # categoría documental sugerida
+    "ai_analysis_at": str,             # ISO-8601 timestamp de la ejecución
+}
+```
+
+**Notas:**
+- Feature-flagged: si `ANTHROPIC_API_KEY` está vacía, el feature está desactivado (503).
+- El modelo usado es `settings.ANTHROPIC_MODEL` (Claude Haiku); el prompt del sistema tiene `cache_control: ephemeral` para activar prompt caching.
+- El texto de entrada se trunca a `settings.AI_MAX_INPUT_CHARS` antes de enviarse.
+- El cliente `anthropic.Anthropic` se instancia dentro de la función para no romper imports ni tests que no ejerciten el feature de IA.
+
+---
+
+### `cleanup_service` — `backend/apps/documents/services/cleanup_service.py`
+
+| Función | Parámetros | Retorno | Side Effects | Excepciones |
+|---|---|---|---|---|
+| `delete_orphan_blobs` | `grace_hours: int \| None = None` | `dict` (`{"scanned": int, "deleted": int, "skipped_grace": int}`) | Itera todos los objetos del bucket vía `StorageService.list_objects()`; llama `StorageService.delete_file(key)` por cada blob huérfano fuera del período de gracia; no modifica ninguna tabla de DB | Ninguna (silencia errores de storage individuales vía logger) |
+
+**Lógica de "blob vivo":** un blob se conserva si su `key` aparece en `Document.storage_path` (cualquier org) **o** en `DocumentVersion.storage_path` de versiones cuyo documento padre está vivo (`deleted_at IS NULL`), **o** si su `last_modified` es más reciente que `now() - grace_hours` (guarda de uploads en vuelo).
+
+**Notas:**
+- Intencionalmente tenant-agnóstico: el bucket es global y las claves ya incluyen prefijo de org. Única excepción justificada a la regla de multi-tenancy (decisión de diseño cerrada #21).
+- `grace_hours` usa `settings.ORPHAN_BLOB_GRACE_HOURS` si no se pasa argumento.
+- Programada como tarea Beat diaria a las 03:00 UTC (Fase 4.3).
+- El dict de retorno se loguea en `logger.info` para observabilidad.
+
+---
+
+### `health_service` — `backend/apps/core/services/health_service.py`
+
+| Función | Parámetros | Retorno | Side Effects | Excepciones |
+|---|---|---|---|---|
+| `check_health` | *(ninguno)* | `dict` (`{"database": str, "redis": str, "storage": str}`) | Ejecuta `SELECT 1` en PostgreSQL; hace `SET + GET` en Redis con `timeout=5`; llama `StorageService.ensure_bucket()` | Nunca relanza — captura todas las excepciones internamente y devuelve `"error"` en la clave correspondiente |
+
+**Valores posibles por clave:** `"ok"` | `"error"`.
+
+**Notas:**
+- Tenant-agnóstico: no requiere request ni organización; se ejecuta antes de autenticación.
+- Llamado por `GET /api/v1/health/` — única excepción al envelope `{data, meta}` (decisión #24). El endpoint tiene `authentication_classes=[]`.
+- Los fallos se logean con `logger.exception` para trazabilidad pero no se propagan.
+- No genera `AuditLog` (decisión #25).
 
 ---
 
@@ -1501,3 +1654,177 @@ workflowKeys.executionLogs(id, pg)   = ['workflows', 'executions', id, 'logs', p
 | `useWorkflowExecutionLogs` | `GET /workflows/executions/{id}/logs/` | — | `WorkflowStepLog[]` paginado |
 | `useAuditLogs` | `GET /audit-logs/` | `ListAuditLogsParams` | `AuditLog[]` paginado |
 | `useSearch` | `GET /search/` | `{q, page}` | `SearchResult[]` paginado |
+
+---
+
+## 13. Backend — Permission Classes
+
+**Path:** `backend/apps/permissions/permissions.py`
+Todas las clases heredan de `rest_framework.permissions.BasePermission`.
+
+### `IsOrganizationMember`
+
+| Atributo | Valor |
+|---|---|
+| Herencia | `BasePermission` |
+| Método | `has_permission` |
+| Lógica | `request.user.organization_id == request.organization.id` |
+| Requiere | `OrganizationTenantMiddleware` (inyecta `request.organization`) |
+
+**Usado en:** prácticamente todas las views autenticadas como primer guard de tenant. Combinado con `HasRole` para escrituras.
+
+---
+
+### `HasRole(*roles: str)` — factory
+
+No es una clase directa: es una función que devuelve una clase `BasePermission` con los roles capturados.
+
+```python
+# Ejemplo de uso inline en views
+HasRole("org_admin", "supervisor", "editor")().has_permission(request, None)
+```
+
+| Atributo | Valor |
+|---|---|
+| Herencia interna | `BasePermission` |
+| Método | `has_permission` |
+| Lógica | `request.user.role in required_roles` |
+
+**Modo de uso en views:** se instancia inline (`HasRole(*roles)()`) dentro de métodos individuales (no como `permission_classes`) para aplicar RBAC por método HTTP sin necesidad de `get_permissions`.
+
+---
+
+### `IsSuperAdmin`
+
+Alias de conveniencia: `HasRole(UserRole.SUPER_ADMIN)`.
+
+| Rol autorizado | `super_admin` |
+|---|---|
+
+**Usado en:** organizations viewset (crear/eliminar organizaciones).
+
+---
+
+### `IsOrgAdmin`
+
+Alias de conveniencia: `HasRole(UserRole.ORG_ADMIN, UserRole.SUPER_ADMIN)`.
+
+| Roles autorizados | `org_admin`, `super_admin` |
+|---|---|
+
+**Usado en:** users views (`POST /users/`, `PATCH /users/{id}/`, `DELETE /users/{id}/`) a través de `get_permissions()`.
+
+---
+
+### `IsSuperAdminOrOrgAdmin`
+
+Alias directo de `IsOrgAdmin` (solo para legibilidad). Comportamiento idéntico.
+
+---
+
+### `CanReadAuditLogs`
+
+Alias de conveniencia: `HasRole(UserRole.AUDITOR, UserRole.ORG_ADMIN, UserRole.SUPER_ADMIN)`.
+
+| Roles autorizados | `auditor`, `org_admin`, `super_admin` |
+|---|---|
+
+**Usado en:** `GET /audit-logs/` y `GET /audit-logs/{id}/` junto a `IsOrganizationMember`.
+
+---
+
+### Nota: clases de permiso a nivel de objeto
+
+**No existen** `IsDocumentOwner`, `CanViewDocument`, `CanEditDocument`, `CanDeleteDocument`, `CanApproveDocument` como clases dedicadas. El RBAC para escritura en documentos y workflows se aplica **inline** dentro de los métodos de las views mediante `HasRole(*roles)()`:
+
+| Operación | Roles permitidos (constante en views) |
+|---|---|
+| Crear/editar/borrar documentos y carpetas | `_EDITOR_ROLES = ["org_admin", "supervisor", "editor"]` |
+| Iniciar workflow desde documento | `_WORKFLOW_STARTER_ROLES = ["editor", "supervisor", "org_admin", "super_admin"]` |
+| Crear/editar/borrar plantillas de workflow | `_ADMIN_ROLES = ["org_admin", "super_admin"]` |
+
+---
+
+## 14. Backend — Tasks Celery
+
+Todas las tasks son thin dispatchers: contienen solo la recuperación del objeto y la llamada al service correspondiente (sin lógica de negocio directa). Lazy imports en el cuerpo de cada task para evitar ciclos de importación.
+
+### `process_ocr`
+
+**Path:** `backend/apps/documents/tasks/document_tasks.py`
+
+```python
+@shared_task(bind=True, autoretry_for=(TransientError,), retry_backoff=True, retry_jitter=True, max_retries=3)
+def process_ocr(self, document_id: str) -> None
+```
+
+| Atributo | Valor |
+|---|---|
+| Parámetros | `document_id: str` (UUID como string) |
+| Delega a | `ocr_service.process(document)` |
+| Reintentos | `autoretry_for=(TransientError,)`, máx 3, con backoff + jitter |
+| Encolado por | `document_service.create_document` y `document_service.reprocess_ocr` vía `transaction.on_commit` |
+
+**Fallo definitivo:** si `Document.DoesNotExist` → log warning y retorno silencioso (el on_commit puede dispararse tras un rollback). Para errores no `TransientError` → la excepción se propaga y la task queda marcada como `FAILURE` sin más reintentos.
+
+---
+
+### `analyze_document`
+
+**Path:** `backend/apps/documents/tasks/document_tasks.py`
+
+```python
+@shared_task(bind=True, autoretry_for=(TransientError,), retry_backoff=True, retry_jitter=True, max_retries=3)
+def analyze_document(self, document_id: str) -> None
+```
+
+| Atributo | Valor |
+|---|---|
+| Parámetros | `document_id: str` (UUID como string) |
+| Delega a | `ai_service.analyze(document)` |
+| Reintentos | `autoretry_for=(TransientError,)`, máx 3, con backoff + jitter |
+| Encolado por | `document_service.request_ai_analysis` vía `transaction.on_commit` |
+
+**Fallo definitivo:** escribe sentinel `{"status": "failed", "error": "Analysis failed permanently"}` en `document.metadata["ai_analysis"]` antes de propagar la excepción — permite que el frontend deje de hacer polling. Se escribe tanto al agotar reintentos (`TransientError`) como en fallo no transient inmediato.
+
+---
+
+### `cleanup_orphan_blobs`
+
+**Path:** `backend/apps/documents/tasks/document_tasks.py`
+
+```python
+@shared_task
+def cleanup_orphan_blobs() -> dict
+```
+
+| Atributo | Valor |
+|---|---|
+| Parámetros | ninguno |
+| Delega a | `cleanup_service.delete_orphan_blobs()` |
+| Reintentos | ninguno (`@shared_task` sin autoretry) |
+| Encolado por | Celery Beat — `CELERY_BEAT_SCHEDULE` en `base.py`, diariamente a las **03:00 UTC** |
+
+**Retorna:** `dict` con resumen del resultado del cleanup (blobs eliminados, bytes liberados, etc.).
+**Comportamiento:** tenant-agnóstico (excepción justificada); período de gracia de 24h antes de borrar blobs huérfanos; revisa tanto `Document` como `DocumentVersion`. Observabilidad vía `logger.info`.
+
+---
+
+### `send_notification`
+
+**Path:** `backend/apps/notifications/tasks/notification_tasks.py`
+
+```python
+@shared_task(bind=True, autoretry_for=(TransientError,), retry_backoff=True, retry_jitter=True, max_retries=3)
+def send_notification(self, notification_id: str) -> None
+```
+
+| Atributo | Valor |
+|---|---|
+| Parámetros | `notification_id: str` (UUID como string) |
+| Delega a | `notification_service._send(notification)` |
+| Reintentos | `autoretry_for=(TransientError,)`, máx 3, con backoff + jitter — cubre fallos SMTP transitorios |
+| Encolado por | `notification_service.notify_step_assigned` vía `transaction.on_commit` |
+
+**Idempotencia:** `_send` usa un claim atómico (`UPDATE WHERE status IN (pending, failed)`) — si la notificación ya está `sent`, retorna sin acción. Semántica at-least-once.
+**Fallo definitivo:** `Notification.status` queda en `failed`; la excepción se propaga y la task queda marcada como `FAILURE`.
