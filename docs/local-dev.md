@@ -91,11 +91,12 @@ El rol `super_admin` es un rol de plataforma global y **no pertenece a ningún t
 2. Ir a **Documentos** → subir cualquier PDF o imagen
 3. Ver el badge OCR cambiar de `Pendiente` → `Procesando` → `Completado` (requiere Celery corriendo)
 4. Ir a **Búsqueda** y buscar texto del documento
+5. Abrir el documento → pestaña **"Editar metadata"** → asignar a una carpeta con el selector
 
 ### 2. Flujo de workflow (como `admin@acme.com` + `editor@acme.com`)
 1. Como `admin@acme.com`: ir a **Workflows → Plantillas** → crear una plantilla con al menos un paso
-2. Como `editor@acme.com`: ir a un documento → iniciar ejecución del workflow
-3. Como `supervisor@acme.com` o `admin@acme.com`: aprobar/rechazar el paso
+2. Como `editor@acme.com`: abrir cualquier documento → hacer clic en **"Iniciar workflow"** en el header → seleccionar la plantilla en el diálogo y confirmar (el botón solo aparece si hay plantillas disponibles en la organización)
+3. Como `supervisor@acme.com` o `admin@acme.com`: aprobar/rechazar el paso desde la página de la ejecución
 
 ### 3. Verificar aislamiento de tenant
 1. Login como `admin@acme.com` → crear una carpeta o documento

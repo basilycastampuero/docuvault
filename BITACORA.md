@@ -11,8 +11,43 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Sesión de testing local: type mismatch WorkflowExecution + DocumentDetailPage** (2026-06-30). 169 tests frontend. Rama `feature/5.2-frontend-documents`.
+> Última actualización: **Features: asignación de carpetas y workflow desde documento** (2026-06-30). Rama `feature/5.2-frontend-documents`.
 > Proyecto de portafolio completado (Fases 0–5). Fase 6 = mejoras post-portafolio.
+
+---
+
+## 2026-06-30 — Features: asignación de carpetas y workflow desde documento (commits cc78fa8, d90b01d)
+
+Durante la sesión de testing local se identificaron dos gaps de UX: los documentos podían crearse pero no tenían forma de asignarse a una carpeta después de la subida, y para iniciar un workflow era necesario conocer y escribir el UUID del documento a mano. Se implementaron dos features para corregirlos.
+
+---
+
+### Feature 1 — Asignación de carpetas (commit cc78fa8)
+
+**Problema:** los documentos existían sueltos sin forma de moverlos a una carpeta tras la creación. Las carpetas aparecían vacías aunque hubiera documentos en el sistema.
+
+**Solución backend:**
+- Nuevo endpoint `GET /api/v1/folders/tree/` — devuelve todas las carpetas de la organización en lista plana, sin recursión, para poblar selectores de UI.
+- `PATCH /api/v1/documents/{id}/` ahora acepta `folder_id` (UUID o `null` para "sin carpeta"). El service usa un sentinel `FOLDER_UNSET = object()` para distinguir "campo ausente del PATCH" de "usuario quiere mover a raíz (null)". Sin sentinel, cualquier PATCH sin `folder_id` movería el documento a raíz.
+
+**Solución frontend:** selector de carpetas en la pestaña "Editar metadata" de `DocumentDetailPage`. Carga opciones desde `GET /folders/tree/` y envía el UUID elegido (o `null`) en el PATCH.
+
+**Archivos:** `document_service.py`, `documents/api/serializers.py`, `documents/api/views.py`, `documents/api/urls.py`; `documents/api.ts`, `documents/hooks.ts`, `documents/validation.ts`, `documents/components/DocumentMetadataForm.tsx`, `documents/pages/DocumentDetailPage.tsx`.
+
+---
+
+### Feature 2 — Iniciar workflow desde el documento (commit d90b01d)
+
+**Problema:** iniciar un workflow requería conocer el UUID del documento e introducirlo a mano en el formulario de nueva ejecución. El botón aparecía aunque no hubiera plantillas disponibles en la organización.
+
+**Solución backend:**
+- Nuevo endpoint `POST /api/v1/documents/{id}/start-workflow/` — el `document_id` va en la URL. El body solo requiere `template_id`. Valida ejecución activa existente y devuelve 409 `WORKFLOW_ALREADY_ACTIVE` si la hay. Vive en `documents/api/views.py` (no en workflows) por convención: cada `urls.py` importa solo views de su propia app; la dependencia cruzada `documents.views → workflows.services` es legítima en la capa de orquestación.
+
+**Solución frontend:**
+- Botón "Iniciar workflow" en el header de `DocumentDetailPage`. Solo se muestra si `canWrite && plantillas_activas.length > 0`.
+- Nuevo componente `StartWorkflowDialog`: selector de plantilla + confirmación. Al confirmar, navega automáticamente a la página de la ejecución creada.
+
+**Archivos:** `workflows/api/serializers.py`; `workflows/api.ts`, `workflows/hooks.ts`, `workflows/components/StartWorkflowDialog.tsx` (nuevo).
 
 ---
 
