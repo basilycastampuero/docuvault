@@ -225,9 +225,11 @@ export function FolderBrowserPage() {
         </>
       )}
 
-      {/* Upload document dialog */}
+      {/* Upload document dialog — key={id} forces remount on folder navigation so
+          useForm reinitializes with the correct folderId (defaultValues are read once) */}
       {!isRoot && (
         <DocumentUploadDropzone
+          key={id}
           open={uploadOpen}
           folderId={id}
           onOpenChange={setUploadOpen}
