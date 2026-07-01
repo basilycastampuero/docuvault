@@ -172,7 +172,7 @@ export function DocumentDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const role = useAuthStore((s) => s.user?.role)
-  const canWrite = role ? WRITE_ROLES.includes(role) : false
+  const canWrite = role ? (WRITE_ROLES as readonly string[]).includes(role) : false
   const [aiUnavailable, setAiUnavailable] = useState(false)
   const [pollForAi, setPollForAi] = useState(false)
 

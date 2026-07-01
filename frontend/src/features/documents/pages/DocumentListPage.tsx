@@ -37,7 +37,7 @@ const STATUS_OPTIONS: { label: string; value: DocumentStatus | 'all' }[] = [
 
 export function DocumentListPage() {
   const role = useAuthStore((s) => s.user?.role)
-  const canWrite = role ? WRITE_ROLES.includes(role) : false
+  const canWrite = role ? (WRITE_ROLES as readonly string[]).includes(role) : false
 
   const [page, setPage] = useState(1)
   const [statusFilter, setStatusFilter] = useState<DocumentStatus | 'all'>('all')

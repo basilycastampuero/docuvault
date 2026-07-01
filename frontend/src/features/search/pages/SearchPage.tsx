@@ -73,7 +73,7 @@ export function SearchPage() {
             <>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {data.items.map((doc) => (
-                  <DocumentCard key={doc.id} document={doc} />
+                  <DocumentCard key={doc.id} document={doc as unknown as import('@/shared/types').Document} />
                 ))}
               </div>
               <AppPagination page={page} totalPages={totalPages} onPageChange={setPage} />

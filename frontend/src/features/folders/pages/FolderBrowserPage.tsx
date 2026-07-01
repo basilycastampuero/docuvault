@@ -59,7 +59,7 @@ export function FolderBrowserPage() {
   const isRoot = !id
 
   const role = useAuthStore((s) => s.user?.role)
-  const canWrite = role ? WRITE_ROLES.includes(role) : false
+  const canWrite = role ? (WRITE_ROLES as readonly string[]).includes(role) : false
 
   const [createOpen, setCreateOpen] = useState(false)
   const [uploadOpen, setUploadOpen] = useState(false)

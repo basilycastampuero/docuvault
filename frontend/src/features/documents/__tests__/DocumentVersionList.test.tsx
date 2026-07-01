@@ -51,6 +51,7 @@ const MOCK_DOCUMENT: Document = {
   version: 1,
   tags: [],
   metadata: {},
+  ocr_content: '',
   folder: null,
   folder_name: null,
   created_by_email: 'editor@acme.com',

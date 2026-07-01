@@ -21,7 +21,7 @@ interface FolderCardProps {
 export function FolderCard({ folder, onRename, onDelete }: FolderCardProps) {
   const navigate = useNavigate()
   const role = useAuthStore((s) => s.user?.role)
-  const canWrite = role ? WRITE_ROLES.includes(role) : false
+  const canWrite = role ? (WRITE_ROLES as readonly string[]).includes(role) : false
 
   return (
     <Card

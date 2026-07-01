@@ -49,7 +49,7 @@ function formatFileSize(bytes: number): string {
 export function DocumentCard({ document, onDelete }: DocumentCardProps) {
   const navigate = useNavigate()
   const role = useAuthStore((s) => s.user?.role)
-  const canWrite = role ? WRITE_ROLES.includes(role) : false
+  const canWrite = role ? (WRITE_ROLES as readonly string[]).includes(role) : false
   const download = useDownloadDocument()
 
   const timeAgo = formatDistanceToNow(new Date(document.created_at), {

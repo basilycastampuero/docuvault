@@ -51,7 +51,6 @@ function makeDocument(ocr_status: OcrStatus): Document {
     mime_type: 'application/pdf',
     file_size: 1024,
     checksum: 'abc123',
-    storage_path: 'uploads/test.pdf',
     status: 'draft',
     version: 1,
     ocr_status,
@@ -59,7 +58,8 @@ function makeDocument(ocr_status: OcrStatus): Document {
     tags: [],
     metadata: {},
     folder: null,
-    created_by: { id: 'user-1', email: 'test@test.com' },
+    folder_name: null,
+    created_by_email: 'test@test.com',
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-01T00:00:00Z',
   }

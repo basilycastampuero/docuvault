@@ -12,7 +12,7 @@ export function DashboardPage() {
   const navigate = useNavigate()
   const user = useAuthStore((s) => s.user)
   const role = user?.role
-  const canWrite = role ? WRITE_ROLES.includes(role) : false
+  const canWrite = role ? (WRITE_ROLES as readonly string[]).includes(role) : false
 
   const { data: recentDocs, isLoading: docsLoading } = useDocuments({ page: 1, page_size: 6 })
   const { data: foldersData, isLoading: foldersLoading } = useFolders()

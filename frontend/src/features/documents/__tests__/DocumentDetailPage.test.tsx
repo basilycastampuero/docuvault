@@ -55,6 +55,7 @@ const MOCK_DOCUMENT: Document = {
   version: 1,
   tags: ['importante'],
   metadata: {},
+  ocr_content: '',
   folder: null,
   folder_name: null,
   // Flat field — the fix that this regression test guards.
