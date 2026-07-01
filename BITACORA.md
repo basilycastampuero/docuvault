@@ -11,8 +11,15 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Feature: subir documentos desde la carpeta** (2026-06-30). Rama `feature/5.2-frontend-documents`.
+> Última actualización: **Bugs y mejoras en workflows** (2026-06-30). Rama `feature/5.2-frontend-documents`.
 > Proyecto de portafolio completado (Fases 0–5). Fase 6 = mejoras post-portafolio.
+
+---
+
+### 2026-06-30 — Bugs y mejoras en workflows
+**Bug crítico:** 500 en start-workflow → migración `notifications.0001` no aplicada → `python manage.py migrate notifications` (sin cambios de código).
+**Bug NaN:** `DocumentVersionList` calculaba `Math.ceil(undefined/undefined)` cuando backend devuelve `"meta": {}` → desestructuración defensiva con fallback a `1`.
+**UX:** Campo UUID manual de documento en `WorkflowExecutionsPage` → reemplazado por `<Select>` con `useDocuments()`.
 
 ---
 

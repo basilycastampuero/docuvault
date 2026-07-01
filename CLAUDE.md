@@ -504,6 +504,7 @@ fix/{name}    ← Corrección de bugs
 - Features 2026-06-30 — Asignación de carpetas: `GET /api/v1/folders/tree/` (lista plana de carpetas de la org); `PATCH /documents/{id}/` acepta `folder_id` (UUID o null); sentinel `FOLDER_UNSET` en `document_service`; selector de carpetas en pestaña "Editar metadata" de `DocumentDetailPage`
 - Features 2026-06-30 — Workflow desde documento: `POST /api/v1/documents/{id}/start-workflow/` (document_id en URL, valida ejecución activa → 409 `WORKFLOW_ALREADY_ACTIVE`); botón "Iniciar workflow" en header del documento (condicionado a `canWrite && plantillas.length > 0`); `StartWorkflowDialog` con selector de plantilla; navega a la ejecución al confirmar
 - Features 2026-06-30 — Upload desde carpeta: botón "Subir documento" en `FolderBrowserPage` (condicionado a `canWrite && !isRoot`); pre-asigna `folder_id`; invalida `['folders']` en `useUploadDocument.onSuccess`; bug fix: `key={id}` para remount al navegar entre carpetas (react-hook-form defaultValues inmutables post-mount)
+- Bugfix 2026-06-30 — Workflows: migración `notifications.0001` aplicada (500 en start-workflow); NaN en `DocumentVersionList` por `meta: {}` corregido; campo UUID en `WorkflowExecutionsPage` reemplazado por selector de documentos
 
 **Métricas (2026-06-30):** ~526 tests backend (495 normales + 27 `@pytest.mark.integration` + ~4 nuevos) + 169 tests frontend. Cobertura backend: 95%.
 
