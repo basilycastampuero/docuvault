@@ -8,6 +8,7 @@ import {
   type StartExecutionData,
   type AdvanceStepData,
 } from './api'
+import { documentKeys } from '../documents/hooks'
 
 // ─── Query keys ────────────────────────────────────────────────────────────────
 
@@ -107,6 +108,28 @@ export function useStartWorkflowExecution() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: workflowKeys.executions() })
     },
+  })
+}
+
+export function useStartWorkflowFromDocument() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({
+      documentId,
+      templateId,
+    }: {
+      documentId: string
+      templateId: string
+    }) => workflowsApi.executions.startFromDocument(documentId, { template_id: templateId }),
+    onSuccess: (_execution, variables) => {
+      queryClient.invalidateQueries({ queryKey: workflowKeys.executions() })
+      queryClient.invalidateQueries({
+        queryKey: documentKeys.detail(variables.documentId),
+      })
+    },
+    // Errors are handled inline inside StartWorkflowDialog; suppress global toast.
+    meta: { suppressGlobalToast: true },
   })
 }
 

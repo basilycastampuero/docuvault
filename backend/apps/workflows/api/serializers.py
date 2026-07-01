@@ -118,3 +118,9 @@ class WorkflowStartSerializer(serializers.Serializer):
 class WorkflowAdvanceSerializer(serializers.Serializer):
     action = serializers.ChoiceField(choices=WorkflowStepAction.choices)
     comment = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class WorkflowStartFromDocumentSerializer(serializers.Serializer):
+    """Used by DocumentStartWorkflowView to start a workflow from a document detail page."""
+
+    template_id = serializers.UUIDField()

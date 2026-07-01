@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { AlertCircle, ArrowLeft, Download, RefreshCw, Loader2, Folder, BrainCircuit } from 'lucide-react'
+import { AlertCircle, ArrowLeft, Download, RefreshCw, Loader2, Folder, BrainCircuit, Play } from 'lucide-react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { Button } from '@/components/ui/button'
@@ -18,6 +18,8 @@ import { OcrStatusBadge } from '../components/OcrStatusBadge'
 import { DocumentVersionList } from '../components/DocumentVersionList'
 import { DocumentMetadataForm } from '../components/DocumentMetadataForm'
 import { useDocument, useDownloadDocument, useReprocessOcr, useRequestAiAnalysis } from '../hooks'
+import { useWorkflowTemplates } from '@/features/workflows/hooks'
+import { StartWorkflowDialog } from '@/features/workflows/components/StartWorkflowDialog'
 
 interface AiAnalysis {
   status?: string
@@ -169,6 +171,10 @@ export function DocumentDetailPage() {
   const reprocessOcr = useReprocessOcr()
   const requestAiAnalysis = useRequestAiAnalysis()
 
+  const { data: templatesData } = useWorkflowTemplates()
+  const activeTemplates = templatesData?.items.filter((t) => t.is_active) ?? []
+  const [workflowDialogOpen, setWorkflowDialogOpen] = useState(false)
+
   if (!id) {
     navigate('/documents')
     return null
@@ -239,6 +245,16 @@ export function DocumentDetailPage() {
             >
               <RefreshCw className={`mr-2 h-4 w-4 ${reprocessOcr.isPending ? 'animate-spin' : ''}`} />
               Re-procesar OCR
+            </Button>
+          )}
+          {canWrite && activeTemplates.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setWorkflowDialogOpen(true)}
+            >
+              <Play className="mr-2 h-4 w-4" />
+              Iniciar workflow
             </Button>
           )}
           <Button
@@ -417,6 +433,12 @@ export function DocumentDetailPage() {
           )}
         </div>
       </div>
+
+      <StartWorkflowDialog
+        documentId={document.id}
+        open={workflowDialogOpen}
+        onOpenChange={setWorkflowDialogOpen}
+      />
     </div>
   )
 }

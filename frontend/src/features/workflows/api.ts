@@ -131,6 +131,17 @@ export const workflowsApi = {
       return unwrap(response)
     },
 
+    startFromDocument: async (
+      documentId: string,
+      data: { template_id: string },
+    ): Promise<WorkflowExecution> => {
+      const response = await apiClient.post<Envelope<WorkflowExecution>>(
+        `/documents/${documentId}/start-workflow/`,
+        data,
+      )
+      return unwrap(response)
+    },
+
     getLogs: async (
       id: string,
       page = 1,
