@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: test_saasvault_db
+          POSTGRES_USER: saasvault_user
+          POSTGRES_PASSWORD: ci_pass
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U saasvault_user"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - "6379:6379"
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+
+      - name: Install system dependencies
+        run: >-
+          sudo apt-get update &&
+          sudo apt-get install -y
+          libmagic1
+          tesseract-ocr
+          tesseract-ocr-spa
+          poppler-utils
+
+      - name: Install Python dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Lint
+        working-directory: backend
+        run: black --check . && isort --check-only . && flake8 .
+
+      - name: Run tests
+        working-directory: backend
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings.test
+          DJANGO_SECRET_KEY: ci-secret-key-not-used-in-prod
+          DB_NAME: test_saasvault_db
+          DB_USER: saasvault_user
+          DB_PASSWORD: ci_pass
+          DB_HOST: localhost
+          DB_PORT: "5432"
+          REDIS_URL: redis://localhost:6379/0
+          CELERY_BROKER_URL: redis://localhost:6379/1
+          CELERY_RESULT_BACKEND: redis://localhost:6379/2
+        run: pytest -m "not integration"
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: backend/coverage.xml
+          fail_ci_if_error: false
+
+  frontend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Lint
+        run: npm run lint
+        working-directory: frontend
+
+      - name: Type check
+        run: npm run typecheck
+        working-directory: frontend
+
+      - name: Run tests
+        run: npm run test
+        working-directory: frontend
+
+      - name: Build
+        run: npm run build
+        working-directory: frontend
