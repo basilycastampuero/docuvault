@@ -41,6 +41,12 @@ def mock_storage(monkeypatch):
         "apps.documents.services.document_service.StorageService",
         mock_class,
     )
+    # transaction=True tests fire on_commit; with CELERY_TASK_ALWAYS_EAGER the
+    # OCR task runs synchronously and tries to reach MinIO (unavailable in CI).
+    monkeypatch.setattr(
+        "apps.documents.services.document_service.process_ocr.delay",
+        MagicMock(),
+    )
     return mock_instance
 
 

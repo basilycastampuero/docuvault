@@ -71,9 +71,9 @@ class TestFolderSelector:
         org = OrganizationFactory()
         root = FolderFactory(organization=org)
         child = FolderFactory(organization=org, parent=root)
-        tree = get_folder_tree(organization=org)
-        ids = [node["id"] for node in tree]
+        tree = list(get_folder_tree(organization=org))
+        ids = [str(node.id) for node in tree]
         assert str(root.id) in ids
         assert str(child.id) in ids
-        child_node = next(n for n in tree if n["id"] == str(child.id))
-        assert child_node["parent_id"] == str(root.id)
+        child_node = next(n for n in tree if str(n.id) == str(child.id))
+        assert str(child_node.parent_id) == str(root.id)
