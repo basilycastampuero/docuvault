@@ -11,7 +11,7 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Fix ESLint CI (PR #1)** (2026-07-01). Rama `feature/5.2-frontend-documents`.
+> Última actualización: **CI Ronda 3: TypeScript build errors (PR #1)** (2026-07-01). Rama `feature/5.2-frontend-documents`.
 > Proyecto de portafolio completado (Fases 0–5). Fase 6 = mejoras post-portafolio.
 
 ---
@@ -86,6 +86,106 @@ bootstrap secuencial: `getMe()` imperativo antes de renderizar `<Outlet>`). Solu
 Un `// eslint-disable-next-line react-hooks/exhaustive-deps` en la línea 94 ya no
 correspondía a ningún warning activo. ESLint lo reporta como "unused directive". Solución:
 eliminar la directiva.
+
+---
+
+### 2026-07-01 — CI Ronda 2: tests de backend fallaron + imports del frontend no commiteados (commit 387cb1a)
+
+La segunda ronda de CI en la PR #1 expuso tres categorías de problemas distintas.
+
+**ERR-A — `frontend/src/lib/` nunca commiteada (GITIGNORE)**
+
+11 suites de test reportaron "0 tests" en CI. Error: `Failed to resolve import "@/lib/utils"` /
+`Failed to resolve import "@/lib/api-client"`. El directorio `frontend/src/lib/` (que contiene
+`api-client.ts`, `query-client.ts`, `utils.ts` y su test) estaba permanentemente en "untracked
+files" — nunca se hizo `git add`. En CI el directorio no existe y todos los imports fallan con
+exit code 1.
+
+Causa raíz: el `.gitignore` original tenía el patrón `lib/` heredado de Python. Al corregirlo en
+ERR-056 (commit `76f0f8f`) se restringió a `backend/lib/`, pero el directorio base `frontend/src/lib/`
+(diferente de `frontend/src/shared/lib/`) nunca fue commiteado explícitamente. El patrón original
+lo ignoraba silenciosamente y nadie lo detectó porque `git status` tampoco lo mostraba.
+
+Solución: `git add frontend/src/lib/` — 4 archivos commiteados (`api-client.ts`, `query-client.ts`,
+`utils.ts`, `__tests__/query-client.test.ts`).
+
+**ERR-B — `TypeError: 'Folder' object is not subscriptable` (TYPE_CONTRACT)**
+
+`test_folder_selector.py::TestFolderSelector::test_get_folder_tree_flat_list` fallaba porque el test
+usaba acceso de subscript `node["id"]` y `node["parent_id"]`. `get_folder_tree()` devuelve model
+instances de Django (no dicts), por lo que el acceso de subscript lanza `TypeError`.
+
+Solución: acceso de atributo: `str(node.id)` y `str(node.parent_id)` en lugar de subscript. El test
+asumía que el selector devolvía `.values()` (dicts) cuando en realidad devuelve queryset de instancias.
+
+**ERR-C — `celery.exceptions.Retry: TransientError('Storage unavailable')` (ASYNC_CELERY)**
+
+6 tests fallaron con `Retry in 1s: TransientError('Storage unavailable for {document_id}')`. Interacción
+entre tres factores simultáneos:
+
+1. Tests usan `@pytest.mark.django_db(transaction=True)` → los hooks `on_commit` se disparan tras cada
+   commit real (no al final del test completo)
+2. `CELERY_TASK_ALWAYS_EAGER=True` en `test.py` → `process_ocr.delay()` corre síncronamente al ser llamada
+3. El fixture `mock_storage` mockeaba `StorageService` en `document_service` (para `upload_file`) pero NO
+   en `ocr_service`, donde `process_ocr` importa un `StorageService` fresco para `download_file` — ese
+   import nunca se mockeó
+
+MinIO no existe como servicio en el runner de CI → `download_file` lanza `TransientError` → Celery
+reintenta → el test falla.
+
+Solución: añadir `monkeypatch.setattr("apps.documents.services.document_service.process_ocr.delay", MagicMock())`
+dentro del fixture `mock_storage` en `test_document_service.py` y `test_api.py`. El task nunca se encola
+en tests que solo verifican el service de documento.
+
+Por qué no se detectó localmente: MinIO sí corre en Docker Compose durante el desarrollo. El task se ejecutaba
+realmente, descargaba el archivo, y el test pasaba. En CI no hay MinIO.
+
+---
+
+### 2026-07-01 — CI Ronda 3: errores de TypeScript en vite build (commit 4177596)
+
+La tercera ronda falló en el paso `vite build` del job de frontend. `tsc --noEmit` local había pasado
+limpio. La diferencia clave: `vite build` usa `tsconfig.app.json` con `strict: true` más restrictivo
+que el `tsconfig.json` que usa `tsc --noEmit` al correr solo.
+
+**ERR-D — `WRITE_ROLES.includes(role)` rechazado por strict mode (TYPE_CONTRACT)**
+
+`WRITE_ROLES` se define con `as const` → su tipo es `readonly ["super_admin", "org_admin", "supervisor",
+"editor"]`. El método `.includes()` sobre ese tipo solo acepta exactamente esas 4 strings literales.
+`UserRole` incluye `"viewer"` y `"auditor"` → `TS2345` en 7 archivos: `DashboardPage.tsx`,
+`DocumentCard.tsx`, `DocumentVersionList.tsx`, `DocumentDetailPage.tsx`, `DocumentListPage.tsx`,
+`FolderCard.tsx`, `FolderBrowserPage.tsx`.
+
+Solución: `(WRITE_ROLES as readonly string[]).includes(role)` en los 7 archivos afectados.
+
+**ERR-E — `SearchResult` pasado a `DocumentCard` que espera `Document` (TYPE_CONTRACT)**
+
+`SearchResult` extiende `Omit<Document, 'checksum'|'metadata'|'ocr_content'>` — omite 3 campos que
+`DocumentCard` declara en su prop type `document: Document`. Aunque `DocumentCard` no accede a esos
+3 campos en su render, TypeScript los exige en la firma: `TS2739`.
+
+Solución: `doc as unknown as Document` en `SearchPage`. El cast es seguro porque `DocumentCard`
+no consume `checksum`, `ocr_content` ni `metadata`.
+
+**ERR-F — `storage_path` inexistente en tipo `Document` — fixture de test desactualizado (TYPE_CONTRACT)**
+
+Un fixture de `hooks.test.ts` contenía `storage_path: 'uploads/test.pdf'`, campo que existía en una
+versión anterior del tipo `Document` y fue eliminado. `TS2353` en modo strict.
+
+Solución: eliminar `storage_path` del fixture y alinear con el tipo actual (`folder_name`, `created_by_email`).
+
+**ERR-G — `ocr_content` faltante en fixtures de tests (TYPE_CONTRACT)**
+
+Cuando se añadió `ocr_content: string` al tipo `Document` (feature 2026-06-30), dos archivos de test
+no actualizaron su `MOCK_DOCUMENT`. `TS2741: Property 'ocr_content' is missing` en modo strict.
+
+Solución: añadir `ocr_content: ''` al `MOCK_DOCUMENT` en `DocumentDetailPage.test.tsx` y
+`DocumentVersionList.test.tsx`.
+
+**Lección transversal:** `npm run build` (usa `tsconfig.app.json`, `strict: true`) y `tsc --noEmit`
+(usa `tsconfig.json`, menos restrictivo) pueden dar resultados diferentes. Siempre verificar con
+`npm run build` antes de pushear una PR — si solo corre `tsc --noEmit` localmente, los errores de
+strict mode solo aparecen en CI.
 
 ---
 

@@ -5,7 +5,7 @@
 > auditorías de cada fase.
 >
 > Uso principal: referencia histórica y fuente para `docs/ai-agent-guide.md`.
-> Última actualización: 2026-07-01. Errores registrados: ERR-001 a ERR-060.
+> Última actualización: 2026-07-01. Errores registrados: ERR-001 a ERR-067.
 
 ---
 
@@ -13,16 +13,16 @@
 
 | Categoría | Errores |
 |---|---|
-| `TYPE_CONTRACT` | ERR-005, ERR-019, ERR-020, ERR-022, ERR-023, ERR-025, ERR-037, ERR-038, ERR-039, ERR-040, ERR-041, ERR-044, ERR-046, ERR-047, ERR-048, ERR-049, ERR-050 |
+| `TYPE_CONTRACT` | ERR-005, ERR-019, ERR-020, ERR-022, ERR-023, ERR-025, ERR-037, ERR-038, ERR-039, ERR-040, ERR-041, ERR-044, ERR-046, ERR-047, ERR-048, ERR-049, ERR-050, ERR-062, ERR-064, ERR-065, ERR-066, ERR-067 |
 | `REACT_STATE` | ERR-015, ERR-016, ERR-021, ERR-026, ERR-045, ERR-059 |
-| `ASYNC_CELERY` | ERR-008, ERR-009, ERR-012, ERR-013, ERR-014, ERR-017, ERR-018 |
+| `ASYNC_CELERY` | ERR-008, ERR-009, ERR-012, ERR-013, ERR-014, ERR-017, ERR-018, ERR-063 |
 | `ENVELOPE` | ERR-010, ERR-039, ERR-040, ERR-041, ERR-042 |
 | `MIGRATION` | ERR-002, ERR-006, ERR-043 |
 | `DEPENDENCY` | ERR-004, ERR-028, ERR-029, ERR-030, ERR-031, ERR-033, ERR-034, ERR-035, ERR-036, ERR-055 |
 | `POLLING` | ERR-024, ERR-052 |
 | `ESLINT_CONFIG` | ERR-057, ERR-058 |
 | `DEAD_CODE` | ERR-003, ERR-007, ERR-032, ERR-051, ERR-053, ERR-060 |
-| `GITIGNORE` | ERR-001, ERR-056 |
+| `GITIGNORE` | ERR-001, ERR-056, ERR-061 |
 | `RBAC` | ERR-027 |
 | `N_PLUS_1` | ERR-011 |
 | `SOFT_DELETE` | ERR-006 |
@@ -1221,3 +1221,133 @@
 **Solución aplicada:** Eliminar la directiva obsoleta.
 
 **Commit de corrección:** `89f5e86`
+
+---
+
+## CI / PR #1: Rondas 2 y 3 (2026-07-01)
+
+---
+
+## ERR-061: `frontend/src/lib/` nunca commiteada — 11 suites con "0 tests" en CI
+
+| Campo | Valor |
+|---|---|
+| Fecha | 2026-07-01 |
+| Fase | CI / PR #1 |
+| Severidad | ALTA |
+| Categoría | `GITIGNORE` |
+| Archivo(s) afectado(s) | `frontend/src/lib/api-client.ts`, `frontend/src/lib/query-client.ts`, `frontend/src/lib/utils.ts`, `frontend/src/lib/__tests__/query-client.test.ts` |
+
+**Descripción:** 11 suites de test reportaron "0 tests" en CI. Error: `Failed to resolve import "@/lib/utils"` / `Failed to resolve import "@/lib/api-client"`. Exit code 1. En CI el directorio `frontend/src/lib/` no existía porque nunca fue commiteado.
+
+**Causa raíz:** El `.gitignore` original contenía el patrón `lib/` (heredado de Python), que ignoraba cualquier directorio llamado `lib` en toda la jerarquía. Cuando se corrigió a `backend/lib/` en ERR-056 (commit `76f0f8f`), el directorio `frontend/src/lib/` (que aloja el cliente HTTP, query client y utils de Tailwind) ya llevaba tiempo en "untracked files" silenciosamente y nadie lo había commiteado. Diferente de ERR-056, que era sobre `src/shared/lib/roles.ts`; este es el directorio base `src/lib/`.
+
+**Solución aplicada:** `git add frontend/src/lib/` — 4 archivos trackeados y commiteados. Commit `387cb1a`.
+
+---
+
+## ERR-062: `TypeError: 'Folder' object is not subscriptable` — test con acceso de subscript sobre model instance
+
+| Campo | Valor |
+|---|---|
+| Fecha | 2026-07-01 |
+| Fase | CI / PR #1 |
+| Severidad | MEDIA |
+| Categoría | `TYPE_CONTRACT` |
+| Archivo(s) afectado(s) | `backend/apps/documents/tests/test_folder_selector.py` |
+
+**Descripción:** `TestFolderSelector::test_get_folder_tree_flat_list` fallaba con `TypeError: 'Folder' object is not subscriptable` al ejecutar `node["id"]` sobre el resultado de `get_folder_tree()`.
+
+**Causa raíz:** El test fue escrito asumiendo que `get_folder_tree()` devuelve dicts (como haría un queryset `.values()`), usando acceso de subscript `node["id"]`. El selector devuelve model instances de Django; el acceso de subscript falla sobre una instancia.
+
+**Solución aplicada:** Cambiar el test para usar acceso de atributo: `str(node.id)` en lugar de `node["id"]`, `str(node.parent_id)` en lugar de `node["parent_id"]`. Commit `387cb1a`.
+
+---
+
+## ERR-063: `celery.exceptions.Retry: TransientError('Storage unavailable')` — mock_storage incompleto con Celery eager + transaction=True
+
+| Campo | Valor |
+|---|---|
+| Fecha | 2026-07-01 |
+| Fase | CI / PR #1 |
+| Severidad | ALTA |
+| Categoría | `ASYNC_CELERY` |
+| Archivo(s) afectado(s) | `backend/apps/documents/tests/test_document_service.py` (5 tests), `backend/apps/documents/tests/test_api.py` (1 test) |
+
+**Descripción:** 6 tests fallaron con `Retry in 1s: TransientError('Storage unavailable for {document_id}')`. Los tests pasaban localmente pero fallaban en CI.
+
+**Causa raíz:** Interacción de tres factores simultáneos: (1) `@pytest.mark.django_db(transaction=True)` → los hooks `on_commit` se disparan tras cada commit real; (2) `CELERY_TASK_ALWAYS_EAGER=True` → `process_ocr.delay()` corre síncronamente al ser llamada; (3) el fixture `mock_storage` mockeaba `StorageService` en `apps.documents.services.document_service` (para `upload_file`) pero NO en `apps.documents.services.ocr_service`, donde `process_ocr` importa un `StorageService` fresco para `download_file`. MinIO no está disponible en CI → `download_file` lanza `TransientError`. Localmente MinIO sí corre en Docker Compose y el task se ejecutaba correctamente.
+
+**Solución aplicada:** Añadir `monkeypatch.setattr("apps.documents.services.document_service.process_ocr.delay", MagicMock())` dentro del fixture `mock_storage` en ambos archivos. El task nunca se encola en tests que solo verifican el service de documento. Commit `387cb1a`.
+
+---
+
+## ERR-064: `WRITE_ROLES.includes(role)` — `TS2345` en strict mode de `vite build`
+
+| Campo | Valor |
+|---|---|
+| Fecha | 2026-07-01 |
+| Fase | CI / PR #1 |
+| Severidad | MEDIA |
+| Categoría | `TYPE_CONTRACT` |
+| Archivo(s) afectado(s) | `DashboardPage.tsx`, `DocumentCard.tsx`, `DocumentVersionList.tsx`, `DocumentDetailPage.tsx`, `DocumentListPage.tsx`, `FolderCard.tsx`, `FolderBrowserPage.tsx` |
+
+**Descripción:** `TS2345: Argument of type 'UserRole' is not assignable to parameter of type '"super_admin" | "org_admin" | "supervisor" | "editor"'` en 7 archivos durante `vite build` en CI. `tsc --noEmit` local había pasado limpio.
+
+**Causa raíz:** `WRITE_ROLES` definido con `as const` produce tipo `readonly ["super_admin", "org_admin", "supervisor", "editor"]`. `.includes()` sobre ese tipo solo acepta exactamente esas 4 strings literales. `UserRole` incluye también `"viewer"` y `"auditor"` → TypeScript en modo strict lo rechaza. `tsc --noEmit` local usa `tsconfig.json` (menos restrictivo); `vite build` usa `tsconfig.app.json` (`strict: true`).
+
+**Solución aplicada:** Castear a `(WRITE_ROLES as readonly string[]).includes(role)` en los 7 archivos. Commit `4177596`.
+
+---
+
+## ERR-065: `SearchResult` pasado a `DocumentCard` que espera `Document` — `TS2739`
+
+| Campo | Valor |
+|---|---|
+| Fecha | 2026-07-01 |
+| Fase | CI / PR #1 |
+| Severidad | MEDIA |
+| Categoría | `TYPE_CONTRACT` |
+| Archivo(s) afectado(s) | `frontend/src/features/search/pages/SearchPage.tsx` |
+
+**Descripción:** `TS2739: Type 'SearchResult' is missing the following properties from type 'Document': checksum, ocr_content, metadata` en `vite build`.
+
+**Causa raíz:** `SearchResult` extiende `Omit<Document, 'checksum'|'metadata'|'ocr_content'>`, omitiendo 3 campos que `DocumentCard` declara en su prop type `document: Document`. Aunque `DocumentCard` no accede a esos 3 campos en su render, TypeScript en modo strict los exige en la firma del componente.
+
+**Solución aplicada:** Cast `doc as unknown as Document` en `SearchPage`. El cast es seguro porque `DocumentCard` no consume `checksum`, `ocr_content` ni `metadata`. Commit `4177596`.
+
+---
+
+## ERR-066: `storage_path` inexistente en tipo `Document` — fixture de test desactualizado
+
+| Campo | Valor |
+|---|---|
+| Fecha | 2026-07-01 |
+| Fase | CI / PR #1 |
+| Severidad | BAJA |
+| Categoría | `TYPE_CONTRACT` |
+| Archivo(s) afectado(s) | `frontend/src/features/documents/__tests__/hooks.test.ts` |
+
+**Descripción:** `TS2353: Object literal may only specify known properties, and 'storage_path' does not exist in type 'Document'` en `vite build`. El fixture del test contenía `storage_path: 'uploads/test.pdf'`, campo que existía en una versión anterior del tipo `Document` y fue eliminado al sincronizar los tipos con la respuesta real del backend.
+
+**Causa raíz:** Al eliminar `storage_path` del tipo `Document` (ERR-038, 2026-06-30), el fixture del test no fue actualizado en consecuencia.
+
+**Solución aplicada:** Eliminar `storage_path` del fixture y alinear con el tipo actual (`folder_name`, `created_by_email`). Commit `4177596`.
+
+---
+
+## ERR-067: `ocr_content` faltante en fixtures de tests de documentos
+
+| Campo | Valor |
+|---|---|
+| Fecha | 2026-07-01 |
+| Fase | CI / PR #1 |
+| Severidad | BAJA |
+| Categoría | `TYPE_CONTRACT` |
+| Archivo(s) afectado(s) | `frontend/src/features/documents/__tests__/DocumentDetailPage.test.tsx`, `frontend/src/features/documents/__tests__/DocumentVersionList.test.tsx` |
+
+**Descripción:** `TS2741: Property 'ocr_content' is missing in type '...' but required in type 'Document'` en `vite build`. Dos archivos de test tenían `MOCK_DOCUMENT` sin el campo `ocr_content`.
+
+**Causa raíz:** Cuando se añadió `ocr_content: string` al tipo `Document` en la feature de 2026-06-30 (exposición del campo OCR en la API), los fixtures de estos dos tests no fueron actualizados para incluir el nuevo campo requerido.
+
+**Solución aplicada:** Añadir `ocr_content: ''` al `MOCK_DOCUMENT` en ambos archivos. Commit `4177596`.

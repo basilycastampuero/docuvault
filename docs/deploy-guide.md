@@ -1254,6 +1254,16 @@ También puedes usar la consola web de MinIO accesible en `http://TU_VPS_IP:9001
 (el puerto 9001 está expuesto en `docker-compose.prod.yml` como parte del
 servicio minio).
 
+### Diferencias entre CI y entorno local
+
+Dos fuentes de divergencia frecuente que solo aparecen en CI:
+
+**`vite build` vs `tsc --noEmit`:** Usar `tsc --noEmit` localmente compila con `tsconfig.json` (modo estándar). El pipeline CI ejecuta `vite build` que usa `tsconfig.app.json` con `strict: true` más restrictivo. Un `as const` en un array de roles, por ejemplo, hace que `.includes()` solo acepte exactamente los literales del array — el error solo aparece en `vite build`. Regla: siempre verificar con `npm run build` antes de abrir una PR.
+
+**Tests de documento con `transaction=True` + MinIO ausente:** Los tests que usan `@pytest.mark.django_db(transaction=True)` disparan los hooks `on_commit` en cada commit real. Si `CELERY_TASK_ALWAYS_EAGER=True`, las tasks se ejecutan síncronamente. Si el fixture `mock_storage` no mockeaba el import de `StorageService` en el módulo donde la task lo carga (ej: `ocr_service`), la task intenta conectar a MinIO — que no existe en CI. Solución: añadir `monkeypatch.setattr("...process_ocr.delay", MagicMock())` en el fixture para tests que solo verifican el service, sin necesitar el pipeline de procesamiento.
+
+**Archivos no commiteados (untracked):** Un directorio que `.gitignore` ignoraba silenciosamente nunca llega a CI aunque parezca presente localmente. Antes de pushear una PR, correr `git status` para verificar que no hay "untracked files" en `frontend/src/` — especialmente después de cambiar patrones en `.gitignore`.
+
 ### El deploy del workflow de GitHub Actions
 
 El archivo `.github/workflows/deploy.yml` dispara el deploy remotamente:

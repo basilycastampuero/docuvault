@@ -21,6 +21,7 @@
 9. [POLLING — Polling sin cota, sin estado terminal, sin propagación de fallos](#9-polling)
 10. [GITIGNORE — Archivos sensibles en el historial de git](#10-gitignore)
 11. [Checklist pre-PR](#11-checklist-pre-pr)
+12. [CI vs local: configuraciones divergentes](#12-ci-vs-local-configuraciones-divergentes)
 
 ---
 
@@ -836,3 +837,131 @@ Ejecutar mentalmente antes de cada PR que toca este proyecto:
 - [ ] **`pytest -m "not integration"`** en el pipeline CI. Los tests de integración requieren MinIO y solo corren localmente.
 - [ ] **Variables de entorno de Vite en el Dockerfile:** El `ARG VITE_API_BASE_URL` está definido antes del paso `RUN npm run build`. Un bundle de producción sin esta variable apunta a `localhost:8000`.
 - [ ] **`client_max_body_size`** en `nginx.conf` está configurado a `50m` (no el default de 1m).
+- [ ] **`npm run build` antes de pushear:** `tsc --noEmit` y `vite build` usan configs distintas; verificar siempre con `npm run build` antes de abrir una PR.
+- [ ] **`git status` antes de pushear:** verificar que no hay "untracked files" en `frontend/src/` — un directorio ignorado silenciosamente por `.gitignore` no llega a CI.
+
+---
+
+## 12. CI vs local: configuraciones divergentes
+
+Esta sección documenta las diferencias entre correr el proyecto localmente y en CI que han causado fallos repetidos. Un test verde localmente puede rojo en CI por razones que no son obvias.
+
+### 12.1 TypeScript: `tsc --noEmit` vs `vite build`
+
+**El problema:**
+
+```bash
+# Local — pasa limpio
+npx tsc --noEmit
+# → 0 errors
+
+# CI — falla
+npm run build     # ejecuta: vite build
+# → TS2345: Argument of type 'UserRole' is not assignable to...
+```
+
+**Por qué ocurre:**
+
+`tsc --noEmit` usa `tsconfig.json` (configuración base, menos restrictiva). `vite build` usa `tsconfig.app.json`, que en este proyecto tiene `"strict": true`. Las diferencias de strict mode que más afectan:
+
+| Regla | `tsconfig.json` | `tsconfig.app.json` (strict) |
+|---|---|---|
+| `strictNullChecks` | puede estar off | on |
+| Inference en arrays `as const` | menos restrictiva | `.includes()` solo acepta literales exactos |
+| Propiedades faltantes en object literals | warning | error |
+| Propiedades requeridas faltantes en tipos | warning | error |
+
+**Errores concretos de este proyecto (ERR-064 a ERR-067):**
+
+```typescript
+// ERR-064 — as const + includes
+const WRITE_ROLES = ['editor', 'supervisor', 'org_admin', 'super_admin'] as const;
+// ❌ WRITE_ROLES.includes(role) — TS2345 si role es UserRole (incluye 'viewer', 'auditor')
+// ✅ (WRITE_ROLES as readonly string[]).includes(role)
+
+// ERR-065 — prop type más amplio que el tipo del valor pasado
+// ❌ <DocumentCard document={searchResult} /> donde SearchResult omite campos que Document requiere
+// ✅ <DocumentCard document={searchResult as unknown as Document} /> (si el componente no los usa)
+
+// ERR-066/ERR-067 — campos requeridos faltantes en fixtures de test
+// ❌ const MOCK = { id: '...', name: '...' }  // sin ocr_content
+// ✅ const MOCK = { id: '...', name: '...', ocr_content: '' }
+```
+
+**Regla:** Siempre verificar con `npm run build` antes de abrir una PR. Si el paso `vite build` falla en CI pero `tsc --noEmit` pasa local, la causa es casi siempre una de las diferencias de strict mode de la tabla anterior.
+
+---
+
+### 12.2 Tests de backend: mock_storage incompleto con Celery eager + transaction=True
+
+**El problema:**
+
+```
+# En CI:
+celery.exceptions.Retry: Retry in 1s: TransientError('Storage unavailable for {id}')
+# En local: el test pasa
+```
+
+**Por qué ocurre:**
+
+La interacción de tres configuraciones crea un comportamiento que solo aparece en CI:
+
+```
+test.py → CELERY_TASK_ALWAYS_EAGER=True
+         ↓ process_ocr.delay() corre SÍNCRONAMENTE
+
+test → django_db(transaction=True)
+         ↓ on_commit() se dispara en cada COMMIT REAL
+
+CI → MinIO no existe como servicio runner
+         ↓ download_file() lanza TransientError
+```
+
+Localmente MinIO corre en Docker Compose → el task encuentra el archivo → pasa. En CI no hay MinIO → falla.
+
+**Solución para tests que solo verifican el service (no el pipeline OCR):**
+
+```python
+@pytest.fixture
+def mock_storage(monkeypatch):
+    mock = MagicMock()
+    monkeypatch.setattr(
+        "apps.documents.services.document_service.StorageService",
+        lambda: mock,
+    )
+    # CRÍTICO: también mockear el delay del task para que on_commit no lo dispare
+    monkeypatch.setattr(
+        "apps.documents.services.document_service.process_ocr.delay",
+        MagicMock(),
+    )
+    return mock
+```
+
+**Regla general:** Si un test usa `transaction=True` y el código bajo test llama a `.delay()` en un `on_commit`, el task se ejecutará síncronamente en CI si `CELERY_TASK_ALWAYS_EAGER=True`. Mockear solo el `StorageService` no es suficiente — hay que mockear también el `.delay()` del task o cada import de `StorageService` que el task usa en sus módulos propios.
+
+---
+
+### 12.3 Archivos no commiteados: untracked silenciosos
+
+**El problema:**
+
+```
+# Local: los tests pasan
+# CI: Failed to resolve import "@/lib/utils" — 11 suites con 0 tests
+```
+
+**Por qué ocurre:**
+
+Un patrón en `.gitignore` puede ignorar un directorio que parece estar en el proyecto localmente porque existe en el sistema de archivos, pero nunca fue commiteado. El directorio `frontend/src/lib/` fue creado antes de que el `.gitignore` se corrigiera de `lib/` a `backend/lib/`. Durante todo ese tiempo, `git status` mostraba el directorio como ignorado (no como untracked), y el desarrollador asumió que estaba trackeado.
+
+**Cómo detectarlo:**
+
+```bash
+# Ver todos los archivos ignorados en el repo
+git ls-files --others --ignored --exclude-standard frontend/src/
+
+# Ver estado completo incluyendo ignorados
+git status --ignored frontend/src/lib/
+```
+
+**Regla:** Antes de abrir cualquier PR, correr `git status` y revisar que no hay archivos en `frontend/src/` listados como "ignored" o "untracked" que deberían estar en el repo. Si un import funciona local pero falla en CI con "Failed to resolve import", el primer sospechoso es que el archivo nunca fue commiteado.
