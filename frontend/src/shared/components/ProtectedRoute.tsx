@@ -25,6 +25,7 @@ export function ProtectedRoute() {
   useEffect(() => {
     // Si ya hay token Y perfil en memoria, no hay nada que restaurar.
     if (accessToken && user) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setRestorationAttempted(true)
       return
     }

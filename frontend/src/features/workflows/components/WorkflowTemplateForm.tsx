@@ -90,8 +90,6 @@ export function WorkflowTemplateForm({
         ...defaultValuesRef.current,
       })
     }
-  // form is stable across renders (returned by useForm); run once on mount only.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form])
 
   return (

@@ -35,7 +35,7 @@ export const documentsApi = {
   list: async (
     params: ListDocumentsParams = {},
   ): Promise<{ items: Document[]; meta: PaginatedMeta }> => {
-    const { onUploadProgress: _omit, ...queryParams } = params as ListDocumentsParams & {
+    const { onUploadProgress: _, ...queryParams } = params as ListDocumentsParams & {
       onUploadProgress?: unknown
     }
     const response = await apiClient.get<PaginatedEnvelope<Document>>('/documents/', {
