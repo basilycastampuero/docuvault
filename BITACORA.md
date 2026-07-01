@@ -11,8 +11,26 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Features: asignación de carpetas y workflow desde documento** (2026-06-30). Rama `feature/5.2-frontend-documents`.
+> Última actualización: **Fix: exponer `ocr_content` en API y pestaña frontend** (2026-06-30). Rama `feature/5.2-frontend-documents`.
 > Proyecto de portafolio completado (Fases 0–5). Fase 6 = mejoras post-portafolio.
+
+---
+
+## 2026-06-30 — Fix: exponer `ocr_content` en API y UI (commit 7d34ea8)
+
+`ocr_content` existía en el modelo `Document` (TextField) pero no estaba declarado en
+`DocumentSerializer.fields`, por lo que la API no lo devolvía. En consecuencia, la pestaña
+"Contenido OCR" de `DocumentDetailPage` había sido eliminada previamente al comprobar que
+el campo nunca llegaba al frontend.
+
+**Fix backend:** añadido `ocr_content` a `DocumentSerializer` (read-only).
+
+**Fix frontend:** restaurada la pestaña "Contenido OCR" en `DocumentDetailPage`. Aparece
+de forma condicional: solo si `document.ocr_content` tiene texto (documentos sin OCR o con
+`ocr_status=skipped` no muestran la pestaña).
+
+**Archivos:** `backend/apps/documents/api/serializers.py`, `frontend/src/shared/types/index.ts`,
+`frontend/src/features/documents/pages/DocumentDetailPage.tsx`.
 
 ---
 

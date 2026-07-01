@@ -521,7 +521,7 @@ fix/{name}    ← Corrección de bugs
 9. Una sola ejecución activa por documento. Respaldado por `UniqueConstraint` parcial `uq_wf_exec_one_active_per_document`.
 10. `config`/`actions` (JSONB en template/step) se persisten pero NO se interpretan.
 11. FTS usa `config="simple"` (sin stemming). Signal `post_save` reconstruye `search_vector` solo si cambia campo de texto.
-12. OCR cubre solo PDF + imágenes. Office → `ocr_status=skipped`.
+12. OCR cubre solo PDF + imágenes. Office → `ocr_status=skipped`. `ocr_content` se expone en `DocumentSerializer` (read-only) y se muestra en `DocumentDetailPage` como pestaña condicional (solo si tiene contenido).
 13. `ocr_status` es columna real (no JSONB). Default `pending`. Sin re-OCR masivo.
 14. OCR alimenta búsqueda automáticamente: `save(update_fields=["ocr_content"])` dispara signal FTS.
 15. Tareas llaman a services (CLAUDE.md §12). `process_ocr` fina, lógica en `ocr_service`.
