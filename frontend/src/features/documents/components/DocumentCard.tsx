@@ -15,6 +15,7 @@ import {
 import type { Document } from '@/shared/types'
 import { useAuthStore } from '@/features/auth/store'
 import { OcrStatusBadge } from './OcrStatusBadge'
+import { FileTypeBadge } from './FileTypeBadge'
 import { useDownloadDocument } from '../hooks'
 import { WRITE_ROLES } from '@/shared/lib/roles'
 
@@ -58,12 +59,12 @@ export function DocumentCard({ document, onDelete }: DocumentCardProps) {
 
   return (
     <Card
-      className="group cursor-pointer transition-colors hover:bg-accent"
+      className="group cursor-pointer transition-colors hover:bg-accent overflow-hidden"
       onClick={() => navigate(`/documents/${document.id}`)}
     >
       <CardContent className="p-4 space-y-3">
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex items-start gap-3 min-w-0">
+        <div className="flex items-start justify-between gap-2 min-w-0">
+          <div className="flex items-start gap-3 min-w-0 flex-1">
             <FileText className="h-8 w-8 shrink-0 text-primary mt-0.5" />
             <div className="min-w-0">
               <p className="font-medium text-sm truncate">{document.name}</p>
@@ -124,6 +125,7 @@ export function DocumentCard({ document, onDelete }: DocumentCardProps) {
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          <FileTypeBadge mimeType={document.mime_type} />
           <Badge
             variant="secondary"
             className={`text-xs ${STATUS_COLORS[document.status] ?? ''}`}
