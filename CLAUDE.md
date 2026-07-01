@@ -585,3 +585,5 @@ celery -A config.celery worker --loglevel=info
 | `docs/coding-patterns.md` | Patrones de código |
 | `docs/database-conventions.md` | Convenciones de base de datos |
 | `docs/reference.md` | Referencia técnica exhaustiva: modelos, services, selectors, endpoints, serializers, tipos TS, hooks, contrato FE-BE |
+| `docs/error-registry.md` | Registro factual de todos los errores cometidos durante el desarrollo (55 errores, ERR-001 a ERR-055) con causa raíz y solución |
+| `docs/ai-agent-guide.md` | Anti-patrones para agentes IA: TYPE_CONTRACT, REACT_STATE, MIGRATION, ENVELOPE, TENANT_ISOLATION, RBAC, SOFT_DELETE, ASYNC_CELERY, POLLING, GITIGNORE + checklist pre-PR |
