@@ -506,6 +506,7 @@ fix/{name}    ← Corrección de bugs
 - Features 2026-06-30 — Upload desde carpeta: botón "Subir documento" en `FolderBrowserPage` (condicionado a `canWrite && !isRoot`); pre-asigna `folder_id`; invalida `['folders']` en `useUploadDocument.onSuccess`; bug fix: `key={id}` para remount al navegar entre carpetas (react-hook-form defaultValues inmutables post-mount)
 - Bugfix 2026-06-30 — Workflows: migración `notifications.0001` aplicada (500 en start-workflow); NaN en `DocumentVersionList` por `meta: {}` corregido; campo UUID en `WorkflowExecutionsPage` reemplazado por selector de documentos
 - Auditoría 2026-07-01 — Bugs post-testing: crash SearchPage (ocr_status en SearchResultSerializer); tipo SearchResult (Omit<Document,...> + rank); entidades IA invisibles (entities: objeto vs string[])
+- Refactor 2026-07-01 — Baja severidad: fallback ExecutionStatusBadge; Partial<PaginatedMeta> en getVersions; WRITE_ROLES centralizado en shared/lib/roles; cap de polling OCR/workflow; dead code audit eliminado
 
 **Métricas (2026-06-30):** ~526 tests backend (495 normales + 27 `@pytest.mark.integration` + ~4 nuevos) + 169 tests frontend. Cobertura backend: 95%.
 

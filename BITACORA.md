@@ -24,6 +24,14 @@
 
 **[MEDIA] Entidades IA invisibles:** La pestaña "Análisis IA" mostraba resumen y categoría pero nunca las entidades detectadas. El backend almacena `entities: { dates: [], amounts: [], names: [] }` (objeto), pero el frontend lo tipaba como `entities?: string[]`; la guarda `analysis.entities.length > 0` evaluaba `undefined > 0 = false` y silenciaba el bloque. Fix: `AiAnalysis.entities` corregido al tipo objeto real; rendering actualizado para aplanar las tres listas y mostrarlas como badges (`DocumentDetailPage.tsx`).
 
+#### Issues de baja severidad (2026-07-01)
+
+1. **ExecutionStatusBadge fallback** — `CONFIG[status] ?? { label: ..., className: ... }` antes del destructuring. Mismo patrón que `OcrStatusBadge`. Previene crash si el backend añade un nuevo status de workflow no conocido por el cliente.
+2. **`getVersions` tipo honesto** — Retorno cambiado a `Partial<PaginatedMeta>` en `documents/api.ts`, reflejando que el endpoint devuelve `"meta": {}` vacío. Elimina el asunto de falsa seguridad de tipos.
+3. **WRITE_ROLES centralizado** — Creado `frontend/src/shared/lib/roles.ts` con las constantes `WRITE_ROLES`/`START_ROLES` y el helper `canWrite()`. Eliminadas 8 declaraciones locales duplicadas. Previene RBAC inconsistente en la UI si cambia la política de roles.
+4. **Polling con cota máxima** — `useDocument` detiene el polling de OCR tras 40 intentos (~2 min); `useWorkflowExecution` tras 48 intentos (~4 min). Previene polling eterno si el worker Celery muere sin escribir un estado terminal.
+5. **Código muerto audit eliminado** — `auditApi.getById`, `useAuditLog` y `auditKeys.detail` removidos. El backend expone el endpoint `GET /audit-logs/{id}/` pero el frontend nunca lo consumió; mantenerlo generaba deuda de tipos sin valor.
+
 ---
 
 ### 2026-06-30 — Bugs y mejoras en workflows
