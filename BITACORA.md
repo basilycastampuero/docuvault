@@ -11,8 +11,30 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Auditoría de código frontend** (2026-07-01). Rama `feature/5.2-frontend-documents`.
+> Última actualización: **Mejoras UX: FileTypeBadge + fix overflow DocumentCard** (2026-07-01). Rama `feature/5.2-frontend-documents`.
 > Proyecto de portafolio completado (Fases 0–5). Fase 6 = mejoras post-portafolio.
+
+---
+
+### 2026-07-01 — Mejoras UX: FileTypeBadge y fix overflow en DocumentCard (commit bf343b6)
+
+Dos mejoras cosméticas/UX en la capa de listado de documentos, ambas en
+`frontend/src/features/documents/components/`.
+
+**FileTypeBadge (nuevo componente):** mapea `document.mime_type` a un badge coloreado con
+una etiqueta corta legible (PDF=rojo, JPG/PNG/WEBP=azul cielo, DOCX=índigo,
+XLSX/CSV=esmeralda, PPTX=naranja, TXT/desconocido=gris). Maneja los tipos MIME largos de
+Office (e.g. `application/vnd.openxmlformats-officedocument.wordprocessingml.document` → "DOCX")
+mediante un mapa de prefijos. Se renderiza en `DocumentCard` en la fila de badges junto a
+`OcrStatusBadge` y el badge de status del documento.
+
+**Fix overflow en DocumentCard:** los nombres de archivo muy largos desbordaban los bordes
+de la tarjeta. Fix: `overflow-hidden` en el elemento `<Card>` más externo, y `min-w-0 flex-1`
+en el contenedor flex interno. Estos dos valores completan la cadena de truncado que ya
+tenía `truncate` en el `<p>` del nombre — sin `min-w-0`, un flex item no se encoge más allá
+de su contenido mínimo y el truncado no tiene efecto.
+
+**Archivos:** `FileTypeBadge.tsx` (nuevo), `DocumentCard.tsx`.
 
 ---
 

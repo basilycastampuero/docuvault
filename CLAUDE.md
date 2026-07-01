@@ -507,6 +507,7 @@ fix/{name}    ← Corrección de bugs
 - Bugfix 2026-06-30 — Workflows: migración `notifications.0001` aplicada (500 en start-workflow); NaN en `DocumentVersionList` por `meta: {}` corregido; campo UUID en `WorkflowExecutionsPage` reemplazado por selector de documentos
 - Auditoría 2026-07-01 — Bugs post-testing: crash SearchPage (ocr_status en SearchResultSerializer); tipo SearchResult (Omit<Document,...> + rank); entidades IA invisibles (entities: objeto vs string[])
 - Refactor 2026-07-01 — Baja severidad: fallback ExecutionStatusBadge; Partial<PaginatedMeta> en getVersions; WRITE_ROLES centralizado en shared/lib/roles; cap de polling OCR/workflow; dead code audit eliminado
+- Features 2026-07-01 — FileTypeBadge (PDF/JPG/DOCX/XLSX/PPTX/etc. por mime_type, badge coloreado); fix desbordamiento de nombres largos en DocumentCard (overflow-hidden + min-w-0 en cadena de truncado)
 
 **Métricas (2026-06-30):** ~526 tests backend (495 normales + 27 `@pytest.mark.integration` + ~4 nuevos) + 169 tests frontend. Cobertura backend: 95%.
 
@@ -583,3 +584,4 @@ celery -A config.celery worker --loglevel=info
 | `docs/api-conventions.md` | Convenciones REST detalladas |
 | `docs/coding-patterns.md` | Patrones de código |
 | `docs/database-conventions.md` | Convenciones de base de datos |
+| `docs/reference.md` | Referencia técnica exhaustiva: modelos, services, selectors, endpoints, serializers, tipos TS, hooks, contrato FE-BE |

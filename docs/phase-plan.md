@@ -2015,6 +2015,18 @@ date-fns ^4.1           # formateo de timestamps ISO 8601
       backend sigue siendo la autoridad real).
 - [ ] Tests Vitest de: validación de upload (zod), `OcrStatusBadge`, hook de polling.
 
+#### Mejoras post-fase (2026-07-01)
+
+- **`FileTypeBadge`** (`features/documents/components/FileTypeBadge.tsx`): badge coloreado
+  que mapea `document.mime_type` a una etiqueta corta (PDF=rojo, imágenes=azul cielo,
+  DOCX=índigo, XLSX/CSV=esmeralda, PPTX=naranja, TXT/desconocido=gris). Cubre tipos MIME
+  largos de Office (e.g. `application/vnd.openxmlformats-officedocument.wordprocessingml.document`
+  → "DOCX"). Se renderiza en `DocumentCard` junto a los badges de status y OCR.
+- **Fix overflow en `DocumentCard`** (`features/documents/components/DocumentCard.tsx`):
+  añadidos `overflow-hidden` en `<Card>` y `min-w-0 flex-1` en el contenedor interno
+  para completar la cadena de truncado. Los nombres de archivo largos ahora se cortan con
+  `…` en lugar de desbordar el borde de la tarjeta.
+
 #### Commits sugeridos
 
 ```
