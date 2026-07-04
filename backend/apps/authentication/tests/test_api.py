@@ -14,12 +14,13 @@ class TestLoginEndpoint:
         )
         assert response.status_code == status.HTTP_200_OK
 
-    def test_response_contains_access_and_refresh(self, api_client, user):
+    def test_response_contains_access_but_not_refresh_in_body(self, api_client, user):
+        """Should include access in the body but keep refresh out (cookie flag ON by default)."""
         response = api_client.post(
             self.url, {"email": user.email, "password": "testpass123"}
         )
         assert "access" in response.data["data"]
-        assert "refresh" in response.data["data"]
+        assert "refresh" not in response.data["data"]
 
     def test_response_contains_user_data(self, api_client, user):
         response = api_client.post(
@@ -58,25 +59,39 @@ class TestLogoutEndpoint:
         response = api_client.post(
             self.login_url, {"email": user.email, "password": "testpass123"}
         )
-        return response.data["data"]
+        return response
 
     def test_valid_logout_returns_204(self, api_client, user):
-        tokens = self._login(api_client, user)
-        api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
-        response = api_client.post(self.url, {"refresh": tokens["refresh"]})
+        """Should return 204 when logging out via the refresh cookie + valid CSRF header."""
+        login_response = self._login(api_client, user)
+        csrf = login_response.cookies["sv_csrf"].value
+        api_client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {login_response.data['data']['access']}"
+        )
+
+        response = api_client.post(self.url, HTTP_X_CSRF_TOKEN=csrf)
         assert response.status_code == status.HTTP_204_NO_CONTENT
 
-    def test_unauthenticated_logout_returns_401(self, api_client, user):
-        tokens = self._login(api_client, user)
-        response = api_client.post(self.url, {"refresh": tokens["refresh"]})
-        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+    def test_logout_without_authorization_header_still_succeeds(self, api_client, user):
+        """Should succeed (204) with no Authorization header at all — the refresh
+        cookie + CSRF pair is the real proof of identity (AllowAny by design)."""
+        login_response = self._login(api_client, user)
+        csrf = login_response.cookies["sv_csrf"].value
 
-    def test_invalid_token_returns_400(self, api_client, user):
-        tokens = self._login(api_client, user)
-        api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
+        response = api_client.post(self.url, HTTP_X_CSRF_TOKEN=csrf)
+        assert response.status_code == status.HTTP_204_NO_CONTENT
+
+    def test_invalid_refresh_in_body_still_returns_204(self, api_client, user):
+        """Should return 204 (not raise) for a malformed refresh sent via the body
+        fallback — logout is deliberately lenient/idempotent per view design."""
+        login_response = self._login(api_client, user)
+        api_client.cookies.clear()
+        api_client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {login_response.data['data']['access']}"
+        )
+
         response = api_client.post(self.url, {"refresh": "not.a.token"})
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert response.data["error"]["code"] == "INVALID_TOKEN"
+        assert response.status_code == status.HTTP_204_NO_CONTENT
 
 
 @pytest.mark.django_db
@@ -88,16 +103,20 @@ class TestRefreshEndpoint:
         response = api_client.post(
             self.login_url, {"email": user.email, "password": "testpass123"}
         )
-        return response.data["data"]
+        return response
 
     def test_valid_refresh_returns_200(self, api_client, user):
-        tokens = self._login(api_client, user)
-        response = api_client.post(self.url, {"refresh": tokens["refresh"]})
+        """Should return 200 when rotating via the refresh cookie + valid CSRF header."""
+        login_response = self._login(api_client, user)
+        csrf = login_response.cookies["sv_csrf"].value
+        response = api_client.post(self.url, HTTP_X_CSRF_TOKEN=csrf)
         assert response.status_code == status.HTTP_200_OK
 
     def test_response_contains_new_access_token(self, api_client, user):
-        tokens = self._login(api_client, user)
-        response = api_client.post(self.url, {"refresh": tokens["refresh"]})
+        """Should return a fresh access token in the body after cookie-based rotation."""
+        login_response = self._login(api_client, user)
+        csrf = login_response.cookies["sv_csrf"].value
+        response = api_client.post(self.url, HTTP_X_CSRF_TOKEN=csrf)
         assert "access" in response.data["data"]
 
     def test_invalid_token_returns_400(self, api_client):
