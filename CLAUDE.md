@@ -556,7 +556,7 @@ fix/{name}    ← Corrección de bugs
 39. `FOLDER_UNSET = object()` sentinel en `document_service`: distingue "campo `folder_id` ausente del PATCH" de "usuario quiere mover a raíz (`folder=null`)". Sin sentinel, cualquier PATCH que no incluya `folder_id` movería el documento a la raíz.
 40. Endpoint `POST /documents/{id}/start-workflow/` vive en `documents/api/views.py` (no en workflows). Convención: cada `urls.py` importa solo views de su propia app. La dependencia cruzada `documents.views → workflows.services` es legítima en la capa de orquestación (una view puede llamar services de otro dominio).
 
-**Próximo paso:** Proyecto completado en sus fases de portafolio (Fases 0–5). Ver `docs/phase-plan.md` §'Lo que queda FUERA de Fase 5' para mejoras de Fase 6+.
+**Próximo paso:** Proyecto completado en sus fases de portafolio (Fases 0–5). El backlog de Fase 6 (7 sub-fases, `docs/phase-plan.md` §'Fase 6 — Mejoras post-portafolio') fue validado contra el código real el 2026-07-03 — vigente sin invalidaciones. Sub-fase recomendada para empezar: **6.1 — JWT en cookies httpOnly** (cero dependencias, cierra la deuda de seguridad #28, sin migraciones).
 
 ## 18. Cómo correr el proyecto localmente
 
@@ -586,5 +586,5 @@ celery -A config.celery worker --loglevel=info
 | `docs/database-conventions.md` | Convenciones de base de datos |
 | `docs/reference.md` | Referencia técnica exhaustiva: modelos, services, selectors, endpoints, serializers, tipos TS, hooks, contrato FE-BE |
 | `CHANGELOG.md` | Historial de cambios por fase (formato Keep a Changelog): Added/Fixed/Changed con hash de commit |
-| `docs/error-registry.md` | Registro factual de todos los errores cometidos durante el desarrollo (56 errores, ERR-001 a ERR-056) con causa raíz y solución |
+| `docs/error-registry.md` | Registro factual de todos los errores cometidos durante el desarrollo (67 errores, ERR-001 a ERR-067) con causa raíz y solución |
 | `docs/ai-agent-guide.md` | Anti-patrones para agentes IA: TYPE_CONTRACT, REACT_STATE, MIGRATION, ENVELOPE, TENANT_ISOLATION, RBAC, SOFT_DELETE, ASYNC_CELERY, POLLING, GITIGNORE + checklist pre-PR |

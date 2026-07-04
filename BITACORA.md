@@ -11,8 +11,45 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **CI Ronda 3: TypeScript build errors (PR #1)** (2026-07-01). Rama `feature/5.2-frontend-documents`.
-> Proyecto de portafolio completado (Fases 0–5). Fase 6 = mejoras post-portafolio.
+> Última actualización: **Validación del backlog de Fase 6 y arranque planificado de 6.1** (2026-07-03).
+> Rama `feature/5.2-frontend-documents`.
+> Proyecto de portafolio completado (Fases 0–5). Fase 6 = mejoras post-portafolio, en planificación.
+
+---
+
+### 2026-07-03 — Validación del backlog de Fase 6 y decisión de arrancar por 6.1
+
+Se retomó el proyecto para planificar la ejecución de Fase 6. El backlog de 7 sub-fases se había
+agregado a `docs/phase-plan.md` el 2026-07-01 (commit `a6a81a4`), pero nunca se validó contra el
+código real tal como estaba en ese momento — se escribió como propuesta. Antes de empezar a
+implementar nada, se encargó a un agente de arquitectura de software auditar cada premisa del
+backlog contra el estado actual del repositorio y producir un plan de ejecución concreto para la
+sub-fase de arranque.
+
+**Resultado de la validación:** las 7 sub-fases (6.1 a 6.7) siguen vigentes — ninguna quedó
+invalidada por cambios posteriores al plan. Tres hallazgos relevantes emergieron de la auditoría:
+
+1. **`apps/billing` es un paquete vacío, no un "skeleton dormido".** Solo contiene `__init__.py`;
+   no tiene `apps.py` ni está registrado en `INSTALLED_APPS`. La sub-fase 6.6 requiere scaffolding
+   completo desde cero, no "despertar" una estructura existente. Se corrigió la redacción de 6.6 en
+   `docs/phase-plan.md` para reflejarlo con precisión.
+2. **Falta code-splitting en el frontend — deuda real no capturada antes de Fase 6.** El bundle es
+   100% síncrono (0 usos de `React.lazy`/`Suspense`). Se sumó como entregable adicional de la
+   sub-fase 6.5 (madurez de frontend), junto con la nota de que el dark mode ya tiene su estrategia
+   `darkMode: ['class']` declarada en `tailwind.config.js` — falta el toggle y los tokens, no la base.
+3. **El proxy `/api` de Vite en dev es un prerrequisito duro de 6.1, no un detalle opcional.** Sin
+   él, `SameSite=Strict` no entrega la cookie de refresh en el flujo cross-origin de dev (Vite:5173
+   vs API:8000). Se agregó como primera tarea de frontend en el plan de ejecución de 6.1, junto con
+   una segunda precisión: `LogoutView` hoy exige `IsAuthenticated`, lo que rompería el logout con un
+   access ya expirado una vez que el refresh viva en cookie — habrá que pasarlo a `AllowAny` cuando
+   la identidad del refresh viaje por cookie.
+
+**Decisión: se empieza por 6.1 (JWT en cookies httpOnly).** Es la sub-fase de mayor severidad de
+seguridad del backlog (cierra la deuda XSS de la decisión #28), no tiene dependencias de otras
+sub-fases y no requiere ninguna migración de base de datos — el menor riesgo de arranque con el
+mayor impacto de portafolio. El agente arquitecto entregó además un plan de ejecución a nivel de
+archivo/tarea/commit para 6.1, incorporado a `docs/phase-plan.md`. La implementación queda para una
+sesión futura.
 
 ---
 

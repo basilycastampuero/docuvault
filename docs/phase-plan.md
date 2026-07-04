@@ -2692,8 +2692,61 @@ revisor senior busca en un SaaS.
 3. **Rotación y blacklist.** El refresh rotativo + blacklist (ya activos, SimpleJWT) se mantienen; el
    nuevo refresh se re-emite como cookie en cada rotación. Logout invalida en blacklist **y** borra la
    cookie (`Set-Cookie` expirado) desde el backend.
-4. **CORS/entornos.** En prod Nginx sirve mismo origen (sin CORS). En dev (Vite:5173 ≠ API:8000)
-   proxear `/api` desde Vite dev-server para operar en mismo origen y no relajar `SameSite` en dev.
+4. **CORS/entornos.** En prod Nginx sirve mismo origen (sin CORS). En dev (Vite:5173 ≠ API:8000) el
+   proxy `/api` de Vite dev-server es un **prerrequisito duro, no opcional**: sin él, `SameSite=Strict`
+   no entrega la cookie en el flujo cross-origin de dev (Vite:5173 vs API:8000) y el refresh nunca
+   llegaría al backend. Es la primera tarea de frontend de esta sub-fase, no un detalle de conveniencia.
+5. **`LogoutView` y access expirado.** Hoy `LogoutView` exige `IsAuthenticated`; con un access de vida
+   corta, un logout con el access ya expirado fallaría con 401 antes de poder invalidar el refresh. Al
+   migrar a cookie, el logout debe poder leer el refresh directamente de la cookie y operar aun con el
+   access vencido — ajustar el permiso a `AllowAny` cuando la identidad del refresh viaja por cookie
+   (la validez la sigue dando el propio refresh + su blacklist, no el access).
+
+**Plan de ejecución (tareas concretas)** *(validado 2026-07-03 contra el código real; detalle a nivel
+de archivo/tarea para la implementación)*:
+
+Backend:
+1. `backend/config/settings/base.py` — settings de cookie vía decouple: `AUTH_REFRESH_COOKIE_ENABLED`
+   (flag), `AUTH_REFRESH_COOKIE_NAME` (default `sv_refresh`), `..._PATH` (acotado a `/api/v1/auth/`),
+   `..._SAMESITE` (`Strict`), `..._SECURE`, `..._HTTPONLY`; nombre de cookie CSRF double-submit
+   (`sv_csrf`).
+2. `backend/apps/authentication/api/cookies.py` (nuevo) — helpers HTTP puros: `set_refresh_cookie`,
+   `clear_refresh_cookie`, `issue_csrf_token`, `validate_csrf` (double-submit).
+3. `backend/apps/authentication/api/views.py` — `LoginView` setea cookies y deja de exponer el refresh
+   en el body (con el flag activado); `TokenRefreshView` lee el refresh de la cookie (fallback a body
+   durante el rollout), valida CSRF, rota y re-setea la cookie; `LogoutView` pasa a `AllowAny`, lee la
+   cookie, valida CSRF, invalida en blacklist y borra la cookie.
+4. `backend/apps/authentication/api/serializers.py` — `refresh` opcional en `RefreshSerializer`/
+   `LogoutSerializer`.
+5. `backend/apps/authentication/tests/test_auth_cookie.py` (nuevo).
+
+Frontend:
+6. `frontend/vite.config.ts` — `server.proxy` de `/api` → backend (prerrequisito, primera tarea de
+   frontend).
+7. `frontend/src/lib/api-client.ts` — `withCredentials: true`; el interceptor deja de leer `localStorage`
+   para el refresh, llama a `/auth/refresh/` sin body, adjunta el header `X-CSRF-Token`; conserva la
+   cola `isRefreshing`/`failedQueue` (decisión #29).
+8. `frontend/src/features/auth/store.ts` — deja de persistir/borrar `refreshToken` de `localStorage`.
+9. `frontend/src/features/auth/api.ts` — `logout()` sin `refresh` en el body.
+10. `frontend/src/shared/components/ProtectedRoute.tsx` — el bootstrap (decisión #33) deja de leer
+    `localStorage`, confía en la cookie.
+11. `frontend/src/features/auth/__tests__/interceptor.test.ts` — reescribir los casos que usaban
+    `localStorage.setItem('refreshToken', ...)`.
+
+Tests: backend — cookie `HttpOnly`+`Secure`+`SameSite` en login, body sin refresh, refresh con/sin
+cookie, CSRF ausente/incorrecto → 403, logout invalida blacklist + borra cookie, aislamiento de tenant,
+flag apagado = comportamiento legacy. Frontend — N×401 concurrentes → 1 solo refresh vía cookie, sin
+acceso a `localStorage`, header CSRF presente.
+
+Commits sugeridos (conventional commits, uno por subtarea):
+1. `feat(auth): add refresh-cookie settings and feature flag`
+2. `feat(auth): set/read/clear httpOnly refresh cookie in auth views`
+3. `feat(auth): add CSRF double-submit protection to refresh and logout`
+4. `test(auth): cover cookie login/refresh/logout and tenant isolation`
+5. `feat(frontend): add Vite dev proxy for same-origin API`
+6. `refactor(frontend): stop persisting refresh token in localStorage`
+7. `feat(frontend): send refresh via cookie and CSRF header in interceptor`
+8. `test(frontend): update interceptor tests for cookie-based refresh`
 
 **Entregables:**
 - Backend: vistas custom de `login`/`refresh`/`logout` que setean/leen/borran la cookie (subclases de
@@ -2840,17 +2893,24 @@ críticos end-to-end que los tests unitarios no cubren.
 1. **Paginación (#38).** Conectar `<Pagination>` en `WorkflowTemplatesPage`/`WorkflowExecutionsPage`
    al backend usando `meta.count/next/previous/page/page_size` del envelope. Trabajo pequeño de cierre.
 2. **i18n.** `react-i18next` con `es`/`en` como locales iniciales; extraer strings a catálogos.
-3. **Dark mode.** Estrategia `class` de Tailwind + tokens de tema de shadcn/ui (CSS variables); toggle
-   persistido en `localStorage` con respeto a `prefers-color-scheme`.
+3. **Dark mode.** La estrategia `class` de Tailwind (`darkMode: ['class']`) **ya está declarada** en
+   `tailwind.config.js` — la base existe. Lo que falta es el toggle, los tokens de tema de shadcn/ui
+   (CSS variables) y aplicar las clases `dark:` en los componentes; toggle persistido en `localStorage`
+   con respeto a `prefers-color-scheme`.
 4. **E2E.** Playwright. Job separado en CI que levanta backend + frontend (compose) y corre flujos
    críticos: login, upload, búsqueda, avanzar workflow, auditoría, notificación in-app. Job paralelo
    a unit, no bloqueante (más lento/frágil).
 5. **Hints de RBAC en UI (#36).** Opcional y solo como UX-hint (deshabilitar/ocultar botones). El
    backend sigue siendo la única autoridad (decisión #36 respetada).
+6. **Code-splitting del frontend (deuda no capturada antes de Fase 6, validada 2026-07-03).** Hoy el
+   bundle es 100% síncrono (0 usos de `React.lazy`/`Suspense` en el código). División por ruta con
+   `React.lazy`/`Suspense` y, si el análisis del bundle lo justifica, `manualChunks` en la config de
+   Vite. Relevante porque 6.6 (billing) y 6.3 (SSE) seguirán agregando peso al bundle.
 
 **Entregables:**
 - Frontend: `<Pagination>` conectado en listas de workflows; `react-i18next` + catálogos; dark mode
-  toggle; suite Playwright con flujos críticos; (opcional) helpers de hint RBAC en `shared/lib/roles`.
+  toggle; code-splitting por ruta (`React.lazy`/`Suspense`, `manualChunks` en Vite si aplica); suite
+  Playwright con flujos críticos; (opcional) helpers de hint RBAC en `shared/lib/roles`.
 - CI: job `e2e` en `ci.yml`; artefactos de trazas en fallo.
 - Tests: Vitest — interacciones de paginación, cambio de idioma, toggle de tema; Playwright — flujos e2e.
 
@@ -2861,9 +2921,16 @@ críticos end-to-end que los tests unitarios no cubren.
 
 ### 6.6 — `apps/billing` — planes, suscripciones y cuotas por organización
 
-**Objetivo.** Despertar el skeleton `apps/billing` y modelar el corazón monetario de un SaaS: catálogo
+**Objetivo.** Construir `apps/billing` desde cero y modelar el corazón monetario de un SaaS: catálogo
 de planes, suscripción por organización, cuotas/límites por plan y enforcement en los services de
 dominio, con integración de pagos (Stripe) en modo test.
+
+**Precisión (validado 2026-07-03):** `apps/billing` **no** es un "skeleton dormido" con estructura
+interna — hoy es un paquete Python **vacío**: solo contiene `__init__.py`, sin `apps.py`, sin
+`models/`/`services/`/`api/`, y ni siquiera está registrado en `INSTALLED_APPS`. 6.6 requiere
+scaffolding completo desde cero (misma estructura obligatoria de CLAUDE.md §2: `models/`, `services/`,
+`selectors/`, `api/`, `permissions/`, `tasks/`, `tests/`, `admin.py`, `apps.py`), no "despertar" nada
+existente.
 
 **Motivación.** Mayor valor de portafolio de Fase 6: modelado de dominio SaaS real, enforcement
 transversal de límites multi-tenant e integración con un proveedor de pagos.
@@ -2937,6 +3004,12 @@ restaurar a cualquier minuto y valido restauraciones". Cierra los diferidos #7 y
 
 **Complejidad:** L. **Dependencias externas:** `pgBackRest` o `WAL-G`; bucket S3/objeto para WAL;
 segundo entorno (staging VPS o mismo VPS con red separada).
+
+---
+
+**Validado 2026-07-03:** el backlog de Fase 6 fue auditado contra el estado real del código; las 7
+sub-fases siguen vigentes sin invalidaciones. Sub-fase recomendada para empezar: **6.1** (cero
+dependencias, cierra la deuda de seguridad de mayor severidad, sin migraciones).
 
 ---
 
