@@ -15,11 +15,30 @@
  *
  * MSW intercepts at the XMLHttpRequest / fetch level in jsdom, so axios
  * requests are captured without any stub on the axios instance itself.
+ *
+ * Phase 6.1 note: the refresh token now travels as an HttpOnly cookie
+ * (`sv_refresh`), invisible to JS. The interceptor no longer reads/writes
+ * `localStorage` for the refresh flow — it always attempts a network refresh
+ * on 401 (the browser attaches the cookie automatically via
+ * `withCredentials: true`), and adds a `X-CSRF-Token` header read via
+ * `getCookie()` from `@/lib/cookies` for the double-submit CSRF check.
+ * `getCookie` is mocked here (via `vi.hoisted`) so tests can simulate
+ * "CSRF cookie present" vs. "no CSRF cookie" without touching real
+ * `document.cookie` parsing.
  */
 
 import { describe, test, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import { setupServer } from 'msw/node'
 import { http, HttpResponse } from 'msw'
+
+// ─── Mock @/lib/cookies — controls the CSRF header the interceptor sends ──────
+
+const { mockGetCookie } = vi.hoisted(() => ({ mockGetCookie: vi.fn<(name: string) => string | null>() }))
+
+vi.mock('@/lib/cookies', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/cookies')>()
+  return { ...actual, getCookie: mockGetCookie }
+})
 
 // ─── Single import — must match the instance used by the interceptor ──────────
 import { apiClient } from '@/lib/api-client'
@@ -30,6 +49,13 @@ import { useAuthStore } from '@/features/auth/store'
 const server = setupServer()
 
 beforeAll(() => server.listen({ onUnhandledRequest: 'warn' }))
+beforeEach(() => {
+  // Default: a valid CSRF cookie exists (mirrors "user has an active session").
+  // Individual tests override this with `mockGetCookie.mockReturnValue(null)`
+  // to simulate "no session cookie".
+  mockGetCookie.mockReset()
+  mockGetCookie.mockReturnValue('default-csrf-token')
+})
 afterEach(() => {
   server.resetHandlers()
   useAuthStore.setState({ accessToken: null, user: null })
@@ -119,6 +145,76 @@ describe('Request interceptor', () => {
 
     expect(capturedAuthHeader).toBeNull()
   })
+
+  // ── CSRF double-submit header (Phase 6.1) ─────────────────────────────────
+
+  test('adds X-CSRF-Token header on requests to /auth/refresh/', async () => {
+    /**Should read the CSRF cookie value and attach it as X-CSRF-Token for the refresh endpoint */
+    mockGetCookie.mockReturnValue('csrf-value-refresh')
+    let capturedCsrf: string | null = null
+
+    server.use(
+      http.post('http://localhost:8000/api/v1/auth/refresh/', ({ request }) => {
+        capturedCsrf = request.headers.get('X-CSRF-Token')
+        return HttpResponse.json({ data: { access: 'tok' }, meta: {} })
+      }),
+    )
+
+    await apiClient.post('/auth/refresh/', {})
+
+    expect(capturedCsrf).toBe('csrf-value-refresh')
+  })
+
+  test('adds X-CSRF-Token header on requests to /auth/logout/', async () => {
+    /**Should read the CSRF cookie value and attach it as X-CSRF-Token for the logout endpoint */
+    mockGetCookie.mockReturnValue('csrf-value-logout')
+    let capturedCsrf: string | null = null
+
+    server.use(
+      http.post('http://localhost:8000/api/v1/auth/logout/', ({ request }) => {
+        capturedCsrf = request.headers.get('X-CSRF-Token')
+        return new HttpResponse(null, { status: 204 })
+      }),
+    )
+
+    await apiClient.post('/auth/logout/', {})
+
+    expect(capturedCsrf).toBe('csrf-value-logout')
+  })
+
+  test('does not add X-CSRF-Token header on unrelated routes even when a CSRF cookie exists', async () => {
+    /**Should only attach the CSRF header on the two protected paths, never on arbitrary API calls */
+    mockGetCookie.mockReturnValue('csrf-value-should-not-leak')
+    let capturedCsrf: string | null | undefined = 'sentinel'
+
+    server.use(
+      http.get('http://localhost:8000/api/v1/documents/', ({ request }) => {
+        capturedCsrf = request.headers.get('X-CSRF-Token')
+        return HttpResponse.json(DOCUMENTS_RESPONSE)
+      }),
+    )
+
+    await apiClient.get('/documents/')
+
+    expect(capturedCsrf).toBeNull()
+  })
+
+  test('does not add X-CSRF-Token header when no CSRF cookie is present', async () => {
+    /**Should omit the header entirely (not send an empty string) when getCookie returns null */
+    mockGetCookie.mockReturnValue(null)
+    let capturedCsrf: string | null | undefined = 'sentinel'
+
+    server.use(
+      http.post('http://localhost:8000/api/v1/auth/logout/', ({ request }) => {
+        capturedCsrf = request.headers.get('X-CSRF-Token')
+        return new HttpResponse(null, { status: 204 })
+      }),
+    )
+
+    await apiClient.post('/auth/logout/', {})
+
+    expect(capturedCsrf).toBeNull()
+  })
 })
 
 // ─── RESPONSE INTERCEPTOR — refresh flow ──────────────────────────────────────
@@ -126,8 +222,6 @@ describe('Request interceptor', () => {
 describe('Response interceptor — refresh flow', () => {
   test('401 response triggers one refresh call and retries the original request', async () => {
     /**Should silently recover by refreshing the token and replaying the failed request */
-    localStorage.setItem('refreshToken', 'valid-refresh')
-
     let refreshCallCount = 0
     let documentsCallCount = 0
 
@@ -139,7 +233,7 @@ describe('Response interceptor — refresh flow', () => {
       }),
       http.post('http://localhost:8000/api/v1/auth/refresh/', () => {
         refreshCallCount++
-        return HttpResponse.json({ data: { access: 'new-access-token', refresh: 'new-refresh-token' }, meta: {} })
+        return HttpResponse.json({ data: { access: 'new-access-token' }, meta: {} })
       }),
     )
 
@@ -150,10 +244,40 @@ describe('Response interceptor — refresh flow', () => {
     expect(response.status).toBe(200)
   })
 
+  test('refresh request carries the CSRF header from the cookie, withCredentials, and an empty body', async () => {
+    /**Should never send the refresh token in the body — it travels only via the HttpOnly cookie */
+    mockGetCookie.mockReturnValue('csrf-secret-value')
+
+    let capturedCsrfHeader: string | null = null
+    let capturedBody: unknown
+
+    let documentsCallCount = 0
+
+    server.use(
+      http.get('http://localhost:8000/api/v1/documents/', () => {
+        documentsCallCount++
+        if (documentsCallCount === 1) return new HttpResponse(null, { status: 401 })
+        return HttpResponse.json(DOCUMENTS_RESPONSE)
+      }),
+      http.post('http://localhost:8000/api/v1/auth/refresh/', async ({ request }) => {
+        capturedCsrfHeader = request.headers.get('X-CSRF-Token')
+        capturedBody = await request.json()
+        return HttpResponse.json({ data: { access: 'new-token' }, meta: {} })
+      }),
+    )
+
+    useAuthStore.getState().setAccessToken('old-token')
+    await apiClient.get('/documents/')
+
+    expect(capturedCsrfHeader).toBe('csrf-secret-value')
+    expect(capturedBody).toEqual({})
+    // Never present in the body — confirms the refresh flow no longer needs
+    // a client-known refresh token value at all.
+    expect(capturedBody).not.toHaveProperty('refresh')
+  })
+
   test('after successful refresh, the retried request uses the new token', async () => {
     /**Should update the Authorization header with the refreshed token on retry */
-    localStorage.setItem('refreshToken', 'valid-refresh')
-
     const authHeaders: string[] = []
 
     server.use(
@@ -164,7 +288,7 @@ describe('Response interceptor — refresh flow', () => {
         return HttpResponse.json(DOCUMENTS_RESPONSE)
       }),
       http.post('http://localhost:8000/api/v1/auth/refresh/', () => {
-        return HttpResponse.json({ data: { access: 'freshly-issued-token', refresh: 'new-refresh-token' }, meta: {} })
+        return HttpResponse.json({ data: { access: 'freshly-issued-token' }, meta: {} })
       }),
     )
 
@@ -178,8 +302,6 @@ describe('Response interceptor — refresh flow', () => {
 
   test('401 refresh failure triggers logout and does not retry the original request', async () => {
     /**Should clean up the session when the refresh endpoint also rejects — no infinite loop */
-    localStorage.setItem('refreshToken', 'expired-refresh')
-
     let documentsCallCount = 0
 
     server.use(
@@ -187,7 +309,7 @@ describe('Response interceptor — refresh flow', () => {
         documentsCallCount++
         return new HttpResponse(null, { status: 401 })
       }),
-      // Refresh itself returns 401 — the token is truly expired
+      // Refresh itself returns 401 — the session cookie is truly expired/invalid
       http.post('http://localhost:8000/api/v1/auth/refresh/', () => {
         return new HttpResponse(null, { status: 401 })
       }),
@@ -204,9 +326,14 @@ describe('Response interceptor — refresh flow', () => {
     expect(useAuthStore.getState().user).toBeNull()
   })
 
-  test('401 with no refresh token in localStorage triggers immediate logout', async () => {
-    /**Should not attempt a network refresh when localStorage has no refresh token */
-    // localStorage is clean from afterEach — no refreshToken present
+  test('401 always attempts a network refresh even with no CSRF cookie — the refresh cookie is HttpOnly and invisible to JS', async () => {
+    /**
+     * Should NOT skip the network call client-side (there is no client-readable
+     * signal for "session exists" anymore since sv_refresh is HttpOnly) — the
+     * refresh is always attempted, and the backend is the one that rejects it
+     * when there is no valid session cookie.
+     */
+    mockGetCookie.mockReturnValue(null) // no CSRF cookie — mirrors "never logged in"
 
     let refreshCalled = false
 
@@ -216,7 +343,8 @@ describe('Response interceptor — refresh flow', () => {
       }),
       http.post('http://localhost:8000/api/v1/auth/refresh/', () => {
         refreshCalled = true
-        return HttpResponse.json({ data: { access: 'should-not-reach-here', refresh: 'new-refresh' }, meta: {} })
+        // No valid sv_refresh cookie server-side either — refresh itself rejects
+        return new HttpResponse(null, { status: 401 })
       }),
     )
 
@@ -224,9 +352,8 @@ describe('Response interceptor — refresh flow', () => {
 
     await expect(apiClient.get('/documents/')).rejects.toBeTruthy()
 
-    // The interceptor throws before making a network call because there is no
-    // refreshToken in localStorage — so the refresh endpoint is never called
-    expect(refreshCalled).toBe(false)
+    // Unlike the old localStorage-gated behavior, the refresh endpoint IS called
+    expect(refreshCalled).toBe(true)
     // Logout is still called (clears the store)
     expect(useAuthStore.getState().accessToken).toBeNull()
   })
@@ -239,8 +366,6 @@ describe('Response interceptor — refresh flow', () => {
      * requests fail with 401 simultaneously — prevents thundering-herd on
      * the refresh endpoint and avoids token invalidation race conditions.
      */
-    localStorage.setItem('refreshToken', 'valid-refresh')
-
     let refreshCallCount = 0
     let aCallCount = 0
     let bCallCount = 0
@@ -267,7 +392,7 @@ describe('Response interceptor — refresh flow', () => {
         // Simulate a small network delay so the queue fills before the
         // first refresh resolves and the queuing logic gets exercised
         await new Promise<void>((r) => setTimeout(r, 20))
-        return HttpResponse.json({ data: { access: 'shared-new-token', refresh: 'new-refresh-token' }, meta: {} })
+        return HttpResponse.json({ data: { access: 'shared-new-token' }, meta: {} })
       }),
     )
 
@@ -299,8 +424,6 @@ describe('Response interceptor — refresh flow', () => {
      * Should resolve all queued requests with the freshly issued token, not
      * the old one — otherwise the retries would still be rejected by the server.
      */
-    localStorage.setItem('refreshToken', 'valid-refresh')
-
     const authHeadersA: string[] = []
     const authHeadersB: string[] = []
 
@@ -319,7 +442,7 @@ describe('Response interceptor — refresh flow', () => {
       }),
       http.post('http://localhost:8000/api/v1/auth/refresh/', async () => {
         await new Promise<void>((r) => setTimeout(r, 20))
-        return HttpResponse.json({ data: { access: 'brand-new-token', refresh: 'new-refresh-token' }, meta: {} })
+        return HttpResponse.json({ data: { access: 'brand-new-token' }, meta: {} })
       }),
     )
 
@@ -362,8 +485,6 @@ describe('Response interceptor — refresh flow', () => {
      * Should not enter an infinite refresh loop when the retried request also
      * fails with 401 — the `_retry` flag prevents recursive refresh attempts.
      */
-    localStorage.setItem('refreshToken', 'valid-refresh')
-
     let refreshCallCount = 0
 
     server.use(

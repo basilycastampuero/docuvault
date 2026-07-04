@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach } from 'vitest'
+import { describe, test, expect, beforeEach, vi } from 'vitest'
 import { useAuthStore } from '../store'
 import type { UserProfile } from '@/shared/types'
 
@@ -90,12 +90,20 @@ describe('useAuthStore', () => {
     expect(useAuthStore.getState().user).toBeNull()
   })
 
-  test('logout: removes refreshToken from localStorage', () => {
-    /**Should delete the refresh token from localStorage so next load cannot silently refresh */
-    localStorage.setItem('refreshToken', 'some-refresh-token')
-    const { logout } = useAuthStore.getState()
+  test('logout: does not touch localStorage at all (refresh token lives in an HttpOnly cookie, Phase 6.1)', () => {
+    /**Should never read or write localStorage — the backend clears the sv_refresh cookie on /auth/logout/ */
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem')
+    const removeItemSpy = vi.spyOn(Storage.prototype, 'removeItem')
+
+    const { setAccessToken, logout } = useAuthStore.getState()
+    setAccessToken('some-token')
     logout()
-    expect(localStorage.getItem('refreshToken')).toBeNull()
+
+    expect(setItemSpy).not.toHaveBeenCalled()
+    expect(removeItemSpy).not.toHaveBeenCalled()
+
+    setItemSpy.mockRestore()
+    removeItemSpy.mockRestore()
   })
 
   test('logout: is idempotent — calling twice does not throw', () => {
