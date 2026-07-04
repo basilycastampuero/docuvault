@@ -6,10 +6,13 @@ import { Skeleton } from '@/components/ui/skeleton'
 
 // ─── ProtectedRoute ───────────────────────────────────────────────────────────
 // Guarda las rutas autenticadas.
-// Al montar: si no hay accessToken + perfil en memoria pero sí hay
-// refreshToken en localStorage, ejecuta bootstrap secuencial:
-//   1) refresh token → obtiene nuevo access token
+// Al montar: si no hay accessToken + perfil en memoria, ejecuta bootstrap
+// secuencial:
+//   1) refresh token (vía cookie HttpOnly sv_refresh, invisible a JS) → nuevo access token
 //   2) getMe() → rehidrata el perfil de usuario
+// Como la cookie no es legible desde JS (Fase 6.1), ya no hay forma de saber
+// de antemano si existe una sesión — se intenta el refresh siempre; si no hay
+// cookie válida, el backend responde 401 y el catch hace logout().
 // Esto evita que el estado quede con token pero sin perfil tras recargar.
 
 export function ProtectedRoute() {
@@ -30,19 +33,14 @@ export function ProtectedRoute() {
       return
     }
 
-    const storedRefresh = localStorage.getItem('refreshToken')
-    if (!storedRefresh) {
-      setRestorationAttempted(true)
-      return
-    }
-
+    // No hay forma de inspeccionar la cookie sv_refresh desde JS (HttpOnly) —
+    // se intenta el refresh siempre. Si no hay cookie válida, el backend
+    // responde 401 y el catch de abajo limpia la sesión.
     // Bootstrap secuencial: 1) refrescar token, 2) rehidratar perfil.
     setIsRestoring(true)
-    refreshToken(storedRefresh)
-      .then(async ({ access, refresh: newRefresh }) => {
+    refreshToken()
+      .then(async ({ access }) => {
         setAccessToken(access)
-        // Persistir el refresh token rotado (BLACKLIST_AFTER_ROTATION=True)
-        localStorage.setItem('refreshToken', newRefresh)
         // El interceptor de request lee el token del store en getMe().
         const profile = await getMe()
         setUser(profile)

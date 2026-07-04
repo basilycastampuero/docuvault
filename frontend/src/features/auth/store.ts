@@ -23,7 +23,8 @@ export const useAuthStore = create<AuthStore>()((set) => ({
   setAccessToken: (token: string) => set({ accessToken: token }),
   setUser: (user: UserProfile) => set({ user }),
   logout: () => {
+    // El refresh token ya no vive en localStorage — es una cookie HttpOnly
+    // que el propio backend borra en /auth/logout/ (Fase 6.1).
     set({ accessToken: null, user: null })
-    localStorage.removeItem('refreshToken')
   },
 }))

@@ -9,14 +9,15 @@ export async function login(credentials: LoginCredentials): Promise<TokenPair> {
   return unwrap(response)
 }
 
-// POST /auth/logout/ → {} (requiere refresh token en body para blacklistear)
-export async function logout(refreshToken: string): Promise<void> {
-  await apiClient.post('/auth/logout/', { refresh: refreshToken })
+// POST /auth/logout/ → 204 (el refresh viaja en la cookie HttpOnly sv_refresh;
+// el header X-CSRF-Token lo adjunta automáticamente el interceptor de apiClient)
+export async function logout(): Promise<void> {
+  await apiClient.post('/auth/logout/', {})
 }
 
-// POST /auth/refresh/ → { data: { access, refresh }, meta: {} }
-export async function refreshToken(refresh: string): Promise<RefreshResponse> {
-  const response = await apiClient.post<Envelope<RefreshResponse>>('/auth/refresh/', { refresh })
+// POST /auth/refresh/ → { data: { access }, meta: {} } (refresh vía cookie)
+export async function refreshToken(): Promise<RefreshResponse> {
+  const response = await apiClient.post<Envelope<RefreshResponse>>('/auth/refresh/', {})
   return unwrap(response)
 }
 

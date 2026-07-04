@@ -7,6 +7,7 @@ import type {
   ApiErrorBody,
 } from '@/shared/types'
 import { ApiError } from '@/shared/types'
+import { getCookie, CSRF_COOKIE_NAME, CSRF_HEADER_NAME } from '@/lib/cookies'
 
 // No hay circular dependency real: auth/store no importa api-client.
 // Se puede importar directamente. El import era innecesariamente lazy.
@@ -18,15 +19,28 @@ const baseURL =
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ??
   'http://localhost:8000/api/v1'
 
-export const apiClient: AxiosInstance = axios.create({ baseURL })
+// withCredentials: true — necesario para que el navegador mande (y reciba)
+// las cookies sv_refresh (HttpOnly) y sv_csrf en cada request (Fase 6.1).
+export const apiClient: AxiosInstance = axios.create({ baseURL, withCredentials: true })
+
+// Rutas que requieren el header CSRF double-submit (leen/mutan la cookie
+// sv_refresh en el backend). Ver phase-plan §6.1, decisión 2.
+const CSRF_PROTECTED_PATHS = ['/auth/refresh/', '/auth/logout/']
 
 // ─── REQUEST INTERCEPTOR ───────────────────────────────────────────────────────
-// Lee el access token del store de Zustand (memoria) en cada request.
+// Lee el access token del store de Zustand (memoria) en cada request, y
+// adjunta el header CSRF double-submit en las rutas que lo requieren.
 
 apiClient.interceptors.request.use((config) => {
   const token = useAuthStore.getState().accessToken
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
+  }
+  if (config.url && CSRF_PROTECTED_PATHS.some((path) => config.url!.includes(path))) {
+    const csrfToken = getCookie(CSRF_COOKIE_NAME)
+    if (csrfToken) {
+      config.headers[CSRF_HEADER_NAME] = csrfToken
+    }
   }
   return config
 })
@@ -82,21 +96,21 @@ apiClient.interceptors.response.use(
     isRefreshing = true
 
     try {
-      const refreshToken = localStorage.getItem('refreshToken')
-      if (!refreshToken) throw new Error('No refresh token available')
-
-      // Llamada directa con axios base para no entrar en loop de interceptors
-      const { data: envelope } = await axios.post<{
-        data: { access: string; refresh: string }
-      }>(
+      // Llamada directa con axios base (no apiClient) para no entrar en loop
+      // de interceptors. El refresh token viaja solo por la cookie HttpOnly
+      // sv_refresh — el navegador la adjunta solo porque withCredentials es
+      // true; el JS nunca la lee. El header CSRF sí se arma a mano acá.
+      const { data: envelope } = await axios.post<{ data: { access: string } }>(
         `${baseURL}/auth/refresh/`,
-        { refresh: refreshToken },
+        {},
+        {
+          withCredentials: true,
+          headers: { [CSRF_HEADER_NAME]: getCookie(CSRF_COOKIE_NAME) ?? '' },
+        },
       )
 
       const newAccess = envelope.data.access
-      const newRefresh = envelope.data.refresh
       useAuthStore.getState().setAccessToken(newAccess)
-      if (newRefresh) localStorage.setItem('refreshToken', newRefresh)
       apiClient.defaults.headers.common['Authorization'] = `Bearer ${newAccess}`
 
       processQueue(null, newAccess)

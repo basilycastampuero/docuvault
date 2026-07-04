@@ -18,9 +18,9 @@ export function useLogin() {
       const tokens = await loginApi(credentials)
       // 1. Guardar access token en memoria (Zustand)
       setAccessToken(tokens.access)
-      // 2. Guardar refresh token en localStorage (persistencia entre recargas)
-      localStorage.setItem('refreshToken', tokens.refresh)
-      // 3. Obtener perfil del usuario y guardarlo en el store
+      // El refresh token ya no llega al JS — viaja como cookie HttpOnly
+      // sv_refresh seteada por el backend en la misma respuesta (Fase 6.1).
+      // 2. Obtener perfil del usuario y guardarlo en el store
       const user = await getMe()
       setUser(user)
     },
@@ -38,14 +38,12 @@ export function useLogout() {
 
   return useMutation<void, ApiError, void>({
     mutationFn: async () => {
-      const refreshToken = localStorage.getItem('refreshToken')
-      if (refreshToken) {
-        // Best-effort: no bloquear logout si el backend falla
-        try {
-          await logoutApi(refreshToken)
-        } catch {
-          // Ignorar errores del logout remoto — la sesión local siempre se limpia
-        }
+      // El refresh token viaja en la cookie HttpOnly sv_refresh — el backend
+      // la lee solo. Best-effort: no bloquear logout si el backend falla.
+      try {
+        await logoutApi()
+      } catch {
+        // Ignorar errores del logout remoto — la sesión local siempre se limpia
       }
     },
     onSettled: () => {

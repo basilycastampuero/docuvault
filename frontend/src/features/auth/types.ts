@@ -5,10 +5,8 @@ export interface LoginCredentials {
 
 export interface TokenPair {
   access: string
-  refresh: string
 }
 
 export interface RefreshResponse {
   access: string
-  refresh: string
 }
