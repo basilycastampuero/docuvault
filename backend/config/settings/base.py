@@ -199,6 +199,26 @@ SIMPLE_JWT = {
 }
 
 # ---------------------------------------------------------------------------
+# Auth cookies — httpOnly refresh token + CSRF double-submit (Phase 6.1)
+# ---------------------------------------------------------------------------
+
+# Feature flag: rollout seguro. Apagado = comportamiento legado (refresh en el
+# body, sin cookies). Prendido = refresh solo en cookie HttpOnly.
+AUTH_REFRESH_COOKIE_ENABLED = config(
+    "AUTH_REFRESH_COOKIE_ENABLED", default=True, cast=bool
+)
+AUTH_REFRESH_COOKIE_NAME = config("AUTH_REFRESH_COOKIE_NAME", default="sv_refresh")
+# Acotado al namespace de auth: la cookie nunca viaja a otros endpoints.
+AUTH_REFRESH_COOKIE_PATH = "/api/v1/auth/"
+AUTH_REFRESH_COOKIE_SAMESITE = config("AUTH_REFRESH_COOKIE_SAMESITE", default="Strict")
+AUTH_REFRESH_COOKIE_SECURE = config(
+    "AUTH_REFRESH_COOKIE_SECURE", default=True, cast=bool
+)
+# Nunca configurable: es el punto de toda la sub-fase (inaccesible a JS/XSS).
+AUTH_REFRESH_COOKIE_HTTPONLY = True
+AUTH_CSRF_COOKIE_NAME = config("AUTH_CSRF_COOKIE_NAME", default="sv_csrf")
+
+# ---------------------------------------------------------------------------
 # Celery
 # ---------------------------------------------------------------------------
 

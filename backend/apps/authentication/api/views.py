@@ -1,3 +1,6 @@
+import logging
+
+from django.conf import settings
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -5,6 +8,13 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.authentication.api.cookies import (
+    clear_refresh_cookie,
+    get_refresh_from_cookie,
+    issue_csrf_cookie,
+    set_refresh_cookie,
+    validate_csrf,
+)
 from apps.authentication.api.serializers import (
     LoginSerializer,
     LogoutSerializer,
@@ -15,8 +25,19 @@ from apps.authentication.api.serializers import (
 )
 from apps.authentication.selectors import user_selector
 from apps.authentication.services import auth_service, user_service
+from apps.core.exceptions import ValidationError
 from apps.core.pagination import StandardPagination
 from apps.permissions.permissions import IsOrgAdmin, IsOrganizationMember
+
+logger = logging.getLogger(__name__)
+
+
+def _error_response(code: str, message: str, http_status: int) -> Response:
+    """Build the standard `{"error": {...}}` envelope (CLAUDE.md §7)."""
+    return Response(
+        {"error": {"code": code, "message": message, "details": {}}},
+        status=http_status,
+    )
 
 
 class LoginView(APIView):
@@ -27,6 +48,11 @@ class LoginView(APIView):
         request=LoginSerializer,
         responses={200: UserSerializer},
         summary="Authenticate and obtain JWT pair",
+        description=(
+            "When AUTH_REFRESH_COOKIE_ENABLED is on, the refresh token is set as an "
+            "HttpOnly cookie (plus a CSRF double-submit cookie) instead of being "
+            "returned in the body."
+        ),
     )
     def post(self, request: Request) -> Response:
         serializer = LoginSerializer(data=request.data)
@@ -35,7 +61,11 @@ class LoginView(APIView):
         result = auth_service.login(**serializer.validated_data)
         user = result.pop("user")
 
-        return Response(
+        cookie_enabled = settings.AUTH_REFRESH_COOKIE_ENABLED
+        if cookie_enabled:
+            refresh_token = result.pop("refresh")
+
+        response = Response(
             {
                 "data": {
                     **result,
@@ -45,15 +75,26 @@ class LoginView(APIView):
             status=status.HTTP_200_OK,
         )
 
+        if cookie_enabled:
+            set_refresh_cookie(response, refresh_token)
+            issue_csrf_cookie(response)
+
+        return response
+
 
 class LogoutView(APIView):
-    permission_classes = [IsAuthenticated]
+    # AllowAny: the refresh token (validated + blacklisted) is the real proof of
+    # identity here, not the access token. Requiring IsAuthenticated would block a
+    # user with an already-expired access token from logging out (phase-plan §6.1,
+    # decision #5).
+    permission_classes = [AllowAny]
     serializer_class = LogoutSerializer
 
     @extend_schema(
         request=LogoutSerializer,
         responses={
-            204: OpenApiResponse(description="Logged out — refresh blacklisted")
+            204: OpenApiResponse(description="Logged out — refresh blacklisted"),
+            403: OpenApiResponse(description="Invalid or missing CSRF token"),
         },
         summary="Blacklist the refresh token",
     )
@@ -61,8 +102,32 @@ class LogoutView(APIView):
         serializer = LogoutSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        auth_service.logout(serializer.validated_data["refresh"])
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        cookie_enabled = settings.AUTH_REFRESH_COOKIE_ENABLED
+        refresh_token = get_refresh_from_cookie(request) if cookie_enabled else None
+
+        if refresh_token and not validate_csrf(request):
+            return _error_response(
+                "CSRF_INVALID",
+                "Missing or invalid CSRF token.",
+                status.HTTP_403_FORBIDDEN,
+            )
+
+        if not refresh_token:
+            refresh_token = serializer.validated_data["refresh"]
+
+        if refresh_token:
+            try:
+                auth_service.logout(refresh_token)
+            except ValidationError as exc:
+                # The token was already invalid/expired/blacklisted — the user
+                # still wants to be logged out locally, so we don't fail the
+                # request, we just clear the cookie below.
+                logger.warning("Logout with invalid refresh token: %s", exc.message)
+
+        response = Response(status=status.HTTP_204_NO_CONTENT)
+        if cookie_enabled:
+            clear_refresh_cookie(response)
+        return response
 
 
 class TokenRefreshView(APIView):
@@ -71,14 +136,53 @@ class TokenRefreshView(APIView):
 
     @extend_schema(
         request=RefreshSerializer,
-        responses={200: OpenApiResponse(description="New access + refresh pair")},
+        responses={
+            200: OpenApiResponse(description="New access + refresh pair"),
+            401: OpenApiResponse(description="No refresh token provided"),
+            403: OpenApiResponse(description="Invalid or missing CSRF token"),
+        },
         summary="Rotate refresh token",
+        description=(
+            "Reads the refresh token from its HttpOnly cookie when "
+            "AUTH_REFRESH_COOKIE_ENABLED is on (validating the CSRF double-submit "
+            "header); falls back to the request body during the rollout window or "
+            "when the flag is off."
+        ),
     )
     def post(self, request: Request) -> Response:
         serializer = RefreshSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        tokens = auth_service.refresh_token_pair(serializer.validated_data["refresh"])
+        cookie_enabled = settings.AUTH_REFRESH_COOKIE_ENABLED
+        refresh_token = get_refresh_from_cookie(request) if cookie_enabled else None
+
+        if refresh_token:
+            if not validate_csrf(request):
+                return _error_response(
+                    "CSRF_INVALID",
+                    "Missing or invalid CSRF token.",
+                    status.HTTP_403_FORBIDDEN,
+                )
+        else:
+            # No cookie: fall back to a refresh token in the body (transition
+            # window while clients migrate, decision #4) or reject outright.
+            refresh_token = serializer.validated_data["refresh"]
+            if cookie_enabled and not refresh_token:
+                return _error_response(
+                    "INVALID_TOKEN",
+                    "No refresh token provided.",
+                    status.HTTP_401_UNAUTHORIZED,
+                )
+
+        tokens = auth_service.refresh_token_pair(refresh_token)
+
+        if cookie_enabled:
+            new_refresh_token = tokens.pop("refresh")
+            response = Response({"data": tokens}, status=status.HTTP_200_OK)
+            set_refresh_cookie(response, new_refresh_token)
+            issue_csrf_cookie(response)
+            return response
+
         return Response({"data": tokens}, status=status.HTTP_200_OK)
 
 

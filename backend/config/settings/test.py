@@ -24,3 +24,7 @@ AWS_STORAGE_BUCKET_NAME = "saasvault-test"  # noqa: F405
 
 # Capture outgoing emails in memory for assertions — no real SMTP in tests
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"  # noqa: F405
+
+# Tests corren sin HTTPS: el test client no distingue Secure, pero mantenemos
+# consistencia con development.py para no depender de HTTPS en CI.
+AUTH_REFRESH_COOKIE_SECURE = False

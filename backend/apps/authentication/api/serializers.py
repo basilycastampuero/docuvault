@@ -9,11 +9,14 @@ class LoginSerializer(serializers.Serializer):
 
 
 class LogoutSerializer(serializers.Serializer):
-    refresh = serializers.CharField()
+    # Optional: with the refresh-cookie scheme (Phase 6.1) the token travels via
+    # an HttpOnly cookie, not the body. Kept for the legacy/fallback flow.
+    refresh = serializers.CharField(required=False, allow_blank=True, default="")
 
 
 class RefreshSerializer(serializers.Serializer):
-    refresh = serializers.CharField()
+    # Optional: see LogoutSerializer — the view decides cookie vs. body.
+    refresh = serializers.CharField(required=False, allow_blank=True, default="")
 
 
 class UserSerializer(serializers.ModelSerializer):

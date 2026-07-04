@@ -9,3 +9,6 @@ CORS_ALLOW_ALL_ORIGINS = True
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 
 LOGGING["loggers"]["apps"]["level"] = "DEBUG"  # noqa: F405
+
+# No hay HTTPS en dev local: el navegador descartaría una cookie Secure.
+AUTH_REFRESH_COOKIE_SECURE = False
