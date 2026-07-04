@@ -675,14 +675,30 @@ Todas las respuestas siguen el envelope `{"data": ..., "meta": {...}}` excepto e
 
 ### Autenticación (`/auth/`)
 
+**Fase 6.1 — cookies httpOnly (con `AUTH_REFRESH_COOKIE_ENABLED=True`, default):** el `refresh`
+deja de viajar en el body de `/auth/login/` y `/auth/refresh/`; el backend lo setea como cookie
+`HttpOnly Secure SameSite=Strict` (`sv_refresh`, path acotado a `/api/v1/auth/`) más una cookie
+CSRF no-HttpOnly (`sv_csrf`). `/auth/refresh/` y `/auth/logout/` leen el refresh de la cookie y
+exigen el header `X-CSRF-Token` (double-submit: debe igualar el valor de `sv_csrf`); si falta o no
+coincide → 403 `CSRF_INVALID`. Si el flag está desactivado, el comportamiento es el legado (tabla
+de abajo, `refresh` en el body). Con el flag activo y sin cookie ni body, `/auth/refresh/` responde
+401 `INVALID_TOKEN`. `/auth/logout/` es `AllowAny` (la identidad la da el refresh + su blacklist,
+no el `access`) y es idempotente: un refresh ya blacklisteado/inválido no aborta la request, solo
+limpia la cookie.
+
 | Método | URL | Permisos | Request body | Response `data` |
 |---|---|---|---|---|
-| `POST` | `/auth/login/` | `AllowAny` | `{email, password}` | `{access, refresh, user: UserSerializer}` |
-| `POST` | `/auth/logout/` | `IsAuthenticated` | `{refresh}` | — (204) |
-| `POST` | `/auth/refresh/` | `AllowAny` | `{refresh}` | `{access, refresh}` |
+| `POST` | `/auth/login/` | `AllowAny` | `{email, password}` | `{access, user: UserSerializer}` (+ cookies `sv_refresh`/`sv_csrf`) |
+| `POST` | `/auth/logout/` | `AllowAny` (Fase 6.1; antes `IsAuthenticated`) | `{refresh}` (legado, flag off) | — (204); borra `sv_refresh`/`sv_csrf` |
+| `POST` | `/auth/refresh/` | `AllowAny` | `{refresh}` (legado, flag off) | `{access}` (+ cookies re-seteadas) |
 | `GET` | `/auth/me/` | `IsAuthenticated` | — | `UserSerializer` |
 
-**Errores comunes:** `INVALID_CREDENTIALS` (400), `ACCOUNT_DISABLED` (400), `TOKEN_NOT_VALID` (401).
+**Errores comunes:** `INVALID_CREDENTIALS` (400), `ACCOUNT_DISABLED` (400), `TOKEN_NOT_VALID` (401), `CSRF_INVALID` (403, Fase 6.1), `INVALID_TOKEN` (401, sin refresh ni en cookie ni en body).
+
+**Nota de comportamiento (no es un bug, preexistente a Fase 6.1):** un refresh token ya
+blacklisteado reenviado a `/auth/refresh/` responde **400** `INVALID_TOKEN`, no 401 — porque
+`ValidationError.status_code` en `apps/core/exceptions.py` es fijo en 400 sin importar el `code=`
+semántico pasado.
 
 ---
 
@@ -1264,8 +1280,8 @@ AuditAction     = 'create' | 'update' | 'delete' | 'view' | 'download' | 'login'
 
 ```typescript
 LoginCredentials { email: string; password: string }
-TokenPair        { access: string; refresh: string }
-RefreshResponse  { access: string; refresh: string }
+TokenPair        { access: string }   // Fase 6.1: ya no incluye `refresh` (viaja en cookie httpOnly)
+RefreshResponse  { access: string }   // Fase 6.1: ídem
 ```
 
 ---
@@ -1275,12 +1291,14 @@ RefreshResponse  { access: string; refresh: string }
 ### Cliente base
 **Path:** `frontend/src/lib/api-client.ts`
 
-- `apiClient` — instancia Axios con `baseURL = VITE_API_BASE_URL ?? 'http://localhost:8000/api/v1'`
-- Interceptor request: inyecta `Authorization: Bearer {accessToken}` desde Zustand
-- Interceptor response: cola de refresh (`isRefreshing + failedQueue`) — un solo refresh para N 401 concurrentes; en fallo redirige a `/login`
+- `apiClient` — instancia Axios con `baseURL = VITE_API_BASE_URL ?? 'http://localhost:8000/api/v1'`, `withCredentials: true` (Fase 6.1, para que el navegador adjunte las cookies `sv_refresh`/`sv_csrf`)
+- Interceptor request: inyecta `Authorization: Bearer {accessToken}` desde Zustand; en rutas `/auth/refresh/` y `/auth/logout/` adjunta el header `X-CSRF-Token` leído de la cookie `sv_csrf` (`getCookie()` de `frontend/src/lib/cookies.ts`)
+- Interceptor response: cola de refresh (`isRefreshing + failedQueue`) — un solo refresh para N 401 concurrentes; en fallo redirige a `/login`. Desde Fase 6.1 el refresh viaja solo por cookie HttpOnly, no se lee `localStorage`
 - `unwrap<T>(response)` → `T` — desenvuelve `{data: Envelope<T>}`
 - `unwrapPaginated<T>(response)` → `{ items: T[]; meta: PaginatedMeta }` — desenvuelve `PaginatedEnvelope<T>`
 - `parseApiError(error)` → `ApiError` — normaliza errores Axios al formato `ApiError`
+
+**`frontend/src/lib/cookies.ts` (nuevo, Fase 6.1):** `getCookie(name)` lee cookies no-HttpOnly de `document.cookie`; constantes `CSRF_COOKIE_NAME = 'sv_csrf'`, `CSRF_HEADER_NAME = 'X-CSRF-Token'`.
 
 ---
 
@@ -1289,9 +1307,12 @@ RefreshResponse  { access: string; refresh: string }
 | Función | Parámetros | Retorno | Endpoint |
 |---|---|---|---|
 | `login` | `LoginCredentials` | `Promise<TokenPair>` | `POST /auth/login/` |
-| `logout` | `refreshToken: string` | `Promise<void>` | `POST /auth/logout/` |
-| `refreshToken` | `refresh: string` | `Promise<RefreshResponse>` | `POST /auth/refresh/` |
+| `logout` | — (Fase 6.1; antes `refreshToken: string`) | `Promise<void>` | `POST /auth/logout/` |
+| `refreshToken` | — (Fase 6.1; antes `refresh: string`) | `Promise<RefreshResponse>` | `POST /auth/refresh/` |
 | `getMe` | — | `Promise<UserProfile>` | `GET /auth/me/` |
+
+Desde Fase 6.1, `logout` y `refreshToken` no reciben el refresh token como argumento: viaja
+automáticamente en la cookie `sv_refresh` (HttpOnly, adjuntada por el navegador vía `withCredentials`).
 
 ---
 
@@ -1416,8 +1437,11 @@ Objeto `searchApi`:
 | `useLogout` | — | `UseMutationResult<void, ApiError, void>` | — |
 | `useMe` | — | `UseQueryResult<UserProfile>` | `['auth', 'me']` |
 
-`useLogin` es una mutación: llama `login()` → guarda tokens → llama `getMe()` → navega a `/`.
-`useLogout` vacía Zustand y localStorage y navega a `/login`.
+`useLogin` es una mutación: llama `login()` → guarda `accessToken` en Zustand (el `refresh` ya no
+llega al JS, viaja como cookie httpOnly seteada por el backend en la misma respuesta) → llama
+`getMe()` → navega a `/`.
+`useLogout` llama `logoutApi()` (best-effort, ignora errores del backend), vacía Zustand (el
+`refresh` en cookie lo borra el propio backend) y navega a `/login`.
 
 ---
 
@@ -1521,7 +1545,7 @@ workflowKeys.executionLogs(id, pg)   = ['workflows', 'executions', id, 'logs', p
 ### `ProtectedRoute`
 **Path:** `frontend/src/shared/components/ProtectedRoute.tsx`
 **Props:** ninguna
-**Descripción:** Guarda las rutas autenticadas. Al montar, si existe `refreshToken` en localStorage pero no hay `accessToken+user` en Zustand, ejecuta bootstrap secuencial (refresh → getMe). Muestra Skeleton durante el proceso. Redirige a `/login` si no hay token.
+**Descripción:** Guarda las rutas autenticadas. Al montar, si no hay `accessToken+user` en Zustand, ejecuta bootstrap secuencial (`refreshToken()` → `getMe()`). Muestra Skeleton durante el proceso. Redirige a `/login` si el refresh falla (sin cookie válida) o si no hay `accessToken` al terminar. Desde Fase 6.1 el refresh token vive en cookie `HttpOnly` invisible a JS: ya no hay señal previa en `localStorage` para decidir si intentar el bootstrap — siempre se intenta, y el 401 del backend (sin cookie) dispara el `.catch()` → `logout()`.
 
 ---
 
@@ -1609,9 +1633,12 @@ workflowKeys.executionLogs(id, pg)   = ['workflows', 'executions', id, 'logs', p
 |---|---|---|
 | `setAccessToken` | `(token: string) => void` | Guarda token en Zustand |
 | `setUser` | `(user: UserProfile) => void` | Guarda perfil en Zustand |
-| `logout` | `() => void` | Limpia `accessToken` + `user` + `localStorage.refreshToken` |
+| `logout` | `() => void` | Limpia `accessToken` + `user` del store |
 
-**Nota:** `refreshToken` se almacena en `localStorage` (fuera del store). Tradeoff XSS documentado — migrar a httpOnly cookies es deuda técnica Fase 6 (decisión #28).
+**Nota (Fase 6.1):** el refresh token ya NO se almacena en `localStorage`. Vive en la cookie
+`HttpOnly Secure SameSite=Strict` `sv_refresh`, seteada/leída/borrada exclusivamente por el
+backend — invisible y no manipulable desde JS. Cierra el trade-off XSS documentado en la decisión
+#28 (ver decisión #41 en `CLAUDE.md` §17).
 
 ---
 
@@ -1619,9 +1646,9 @@ workflowKeys.executionLogs(id, pg)   = ['workflows', 'executions', id, 'logs', p
 
 | Hook / Función frontend | Método + Endpoint | Request type | Response `data` type |
 |---|---|---|---|
-| `login` | `POST /auth/login/` | `LoginCredentials` | `TokenPair + user: UserProfile` |
-| `logout` | `POST /auth/logout/` | `{refresh: string}` | — |
-| `refreshToken` | `POST /auth/refresh/` | `{refresh: string}` | `{access, refresh}` |
+| `login` | `POST /auth/login/` | `LoginCredentials` | `TokenPair (access) + user: UserProfile`; setea cookies `sv_refresh`/`sv_csrf` |
+| `logout` | `POST /auth/logout/` | `{}` (refresh vía cookie `sv_refresh`; header `X-CSRF-Token` automático) | — ; borra cookies |
+| `refreshToken` | `POST /auth/refresh/` | `{}` (refresh vía cookie; header `X-CSRF-Token` automático) | `{access}`; re-setea cookies |
 | `getMe` / `useMe` | `GET /auth/me/` | — | `UserProfile` |
 | `useFolders` | `GET /folders/` | — | `Folder[]` paginado |
 | `useFolderTree` / `foldersApi.getTree` | `GET /folders/tree/` | — | `Folder[]` |

@@ -4,7 +4,7 @@
 > agrupados por patrón, con ejemplos de código incorrecto vs. correcto y explicación de
 > por qué ocurren. Destinado a guiar a agentes IA (y desarrolladores) en futuras sesiones.
 >
-> Fuente: `docs/error-registry.md` + BITACORA.md. Fecha: 2026-07-01.
+> Fuente: `docs/error-registry.md` + BITACORA.md. Fecha: 2026-07-01 (última actualización: 2026-07-03).
 
 ---
 
@@ -22,6 +22,7 @@
 10. [GITIGNORE — Archivos sensibles en el historial de git](#10-gitignore)
 11. [Checklist pre-PR](#11-checklist-pre-pr)
 12. [CI vs local: configuraciones divergentes](#12-ci-vs-local-configuraciones-divergentes)
+13. [TEST_QUALITY — Un test en verde no es sinónimo de un test correcto](#13-test_quality--un-test-en-verde-no-es-sinónimo-de-un-test-correcto)
 
 ---
 
@@ -183,6 +184,13 @@ useEffect(() => {
 
 **Regla:** El bootstrap de sesión es un flujo de tres pasos: `refreshToken` → `setAccessToken` + `persistRefresh` → `getMe` → `setUser`. Omitir cualquiera deja el estado inconsistente.
 
+**Actualización Fase 6.1 (2026-07-03):** el ejemplo de arriba refleja el esquema anterior a 6.1
+(`localStorage.getItem('refreshToken')`). Desde 6.1 el refresh token vive en una cookie `HttpOnly`
+invisible a JS — ya no hay nada que leer de `localStorage` ni que persistir manualmente
+(`persistRefresh` desaparece del flujo). El bootstrap ahora es: `refreshToken()` (sin argumento,
+el navegador adjunta la cookie solo) → `setAccessToken` → `getMe()` → `setUser`; si no hay cookie
+válida, `refreshToken()` rechaza y el `.catch()` hace `logout()`. Ver `frontend/src/shared/components/ProtectedRoute.tsx` y decisión #41 en `CLAUDE.md` §17. La lección de fondo (bootstrap secuencial de 3 pasos, nunca solo `setAccessToken`) sigue vigente.
+
 ### 2.3 `FormLabel` de shadcn/ui requiere contexto de `FormField`
 
 **Ejemplo real (ERR-045):**
@@ -315,6 +323,11 @@ async function refreshToken(token: string): Promise<{ access: string; refresh: s
   return unwrap(response);  // ← { access: "eyJ...", refresh: "eyJ..." }
 }
 ```
+
+**Nota (Fase 6.1):** la firma de `refreshToken` en los ejemplos de arriba (`token: string`, retorno
+`{access, refresh}`) corresponde al esquema previo a 6.1. Desde 6.1, `refreshToken()` no recibe
+argumentos (el refresh viaja por cookie `HttpOnly`) y retorna solo `{access}` (el nuevo refresh se
+re-setea como cookie, no vuelve en el body). La lección del envelope (`unwrap`) sigue igual.
 
 **Ejemplo real — tests enmascaraban el bug (ERR-042):**
 
@@ -825,7 +838,8 @@ Ejecutar mentalmente antes de cada PR que toca este proyecto:
 - [ ] **Tipos verificados contra el serializer:** Cada interfaz TypeScript de respuesta de API fue verificada contra el serializer Django real (no "por intuición"). Referencia: `docs/reference.md`.
 - [ ] **Envelope desenvolvido:** Todas las llamadas a la API usan el helper `unwrap()` o acceden a `response.data.data` (no a `response.data` directamente).
 - [ ] **Mocks con envelope:** Los handlers MSW en tests usan el formato `{data: ..., meta: {}}` igual que el backend real.
-- [ ] **Token rotativo persistido:** Si el código toca el interceptor de refresh o el bootstrap de sesión, el nuevo `refresh` token se persiste en `localStorage`.
+- [ ] **Refresh token nunca en `localStorage`/JS (Fase 6.1):** el `refresh` viaja exclusivamente en la cookie `HttpOnly` `sv_refresh`, seteada/leída/borrada por el backend. Si el código toca el interceptor de refresh o el bootstrap de sesión, verificar que no se intente leer, guardar o loguear el refresh token desde JavaScript.
+- [ ] **Header CSRF en refresh/logout:** las llamadas a `/auth/refresh/` y `/auth/logout/` deben adjuntar `X-CSRF-Token` (leído de la cookie `sv_csrf` vía `getCookie()`); el backend responde 403 `CSRF_INVALID` si falta o no coincide.
 - [ ] **Polling con cota:** Cualquier `refetchInterval` tiene una condición de stop por estado terminal Y un contador máximo de iteraciones.
 - [ ] **`key` en componentes con `defaultValues`:** Los componentes con `react-hook-form` que cambian de entidad sin desmontarse tienen `key={entityId}`.
 - [ ] **`FormLabel` solo dentro de `<FormField>`:** No hay `<FormLabel>` de shadcn/ui fuera del contexto de un `FormField`.
@@ -963,5 +977,48 @@ git ls-files --others --ignored --exclude-standard frontend/src/
 # Ver estado completo incluyendo ignorados
 git status --ignored frontend/src/lib/
 ```
+
+---
+
+## 13. TEST_QUALITY — Un test en verde no es sinónimo de un test correcto
+
+**Problema:** Un test pasa, pero no por la razón que su nombre y su intención afirman — pasa porque un mock ausente o incompleto produce, por coincidencia, el mismo resultado observable que el escenario que se quería cubrir.
+
+**Ejemplo real (ERR-068, Fase 6.1):**
+
+```tsx
+// ❌ Test que pasaba desde antes de Fase 6.1 — pero por la razón equivocada
+test('sin refreshToken en localStorage → redirige a /login', async () => {
+  // Sin mock de red configurado para refreshToken().
+  renderProtectedRoute();
+  await waitFor(() => {
+    expect(screen.getByTestId('login-page')).toBeInTheDocument();
+  });
+});
+```
+
+**Por qué pasaba igual:** Sin un mock (MSW o de módulo) para la llamada HTTP que dispara `ProtectedRoute` al montar, jsdom hacía fallar la request con un error de red genérico — indistinguible, para el `.catch()` del componente, de un 401 real del backend. El test terminaba en el mismo estado observable (`Navigate` a `/login`) sin haber ejercitado el camino que decía probar.
+
+```tsx
+// ✅ CORRECTO — mock explícito a nivel de módulo, escenario determinístico
+vi.mock('@/features/auth/api', () => ({
+  refreshToken: vi.fn(),
+  getMe: vi.fn(),
+}))
+
+test('cookie de refresh ausente/inválida → redirige a /login', async () => {
+  vi.mocked(authApi.refreshToken).mockRejectedValue(new Error('401'))
+  renderProtectedRoute()
+  await waitFor(() => {
+    expect(screen.getByTestId('login-page')).toBeInTheDocument()
+  })
+})
+```
+
+**Cómo evitarlo:**
+
+1. Cuando un test depende de una llamada HTTP o de red, verificar explícitamente qué pasa si esa llamada NO está mockeada (¿el test seguiría pasando por una razón distinta?).
+2. Preferir mocks explícitos y deterministas (mock de módulo o handler MSW con handler por defecto para rutas no cubiertas, `onUnhandledRequest: 'error'`) sobre depender de comportamiento incidental de la librería de testing.
+3. Al reescribir un test por un cambio de arquitectura (como el paso de `localStorage` a cookie httpOnly en 6.1), revisar si el test viejo realmente ejercitaba el código que dice cubrir, no solo copiar su aserción final.
 
 **Regla:** Antes de abrir cualquier PR, correr `git status` y revisar que no hay archivos en `frontend/src/` listados como "ignored" o "untracked" que deberían estar en el repo. Si un import funciona local pero falla en CI con "Failed to resolve import", el primer sospechoso es que el archivo nunca fue commiteado.

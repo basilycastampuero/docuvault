@@ -221,23 +221,39 @@ Todos los endpoints excepto `/auth/login/` requieren este header.
 
 ### Flujo de tokens
 
+**Desde Fase 6.1** (`AUTH_REFRESH_COOKIE_ENABLED=True`, default): el `refresh` ya no viaja en el
+body ni se guarda en el cliente. El backend lo entrega como cookie `HttpOnly Secure
+SameSite=Strict` (`sv_refresh`, path `/api/v1/auth/`) junto con una cookie CSRF no-HttpOnly
+(`sv_csrf`). `/auth/refresh/` y `/auth/logout/` leen el refresh de la cookie y exigen el header
+`X-CSRF-Token` (double-submit: debe igualar el valor de `sv_csrf`) — si falta o no coincide → 403
+`CSRF_INVALID`. Con el flag desactivado, el comportamiento es el legado (`refresh` en el body,
+sin CSRF).
+
 ```
 POST /api/v1/auth/login/
 Body: { "email": "...", "password": "..." }
-Response: { "data": { "access": "...", "refresh": "..." } }
+Response: { "data": { "access": "..." } }
+Set-Cookie: sv_refresh=...; HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth/
+Set-Cookie: sv_csrf=...; Secure; SameSite=Strict; Path=/api/v1/auth/
 
 → Usar access en Authorization header
-→ Cuando access expira (401), usar refresh:
+→ Cuando access expira (401), usar refresh (cookie enviada automáticamente por el navegador):
 
 POST /api/v1/auth/refresh/
-Body: { "refresh": "..." }
-Response: { "data": { "access": "...", "refresh": "..." } }  ← nuevo refresh (rotating)
+Header: X-CSRF-Token: <valor de la cookie sv_csrf>
+Body: {}
+Response: { "data": { "access": "..." } }  ← nuevo access; cookies sv_refresh/sv_csrf re-seteadas (rotating)
 
 → Logout:
 POST /api/v1/auth/logout/
-Body: { "refresh": "..." }
-Response: 204  ← refresh en blacklist
+Header: X-CSRF-Token: <valor de la cookie sv_csrf>
+Body: {}
+Response: 204  ← refresh en blacklist; cookies sv_refresh/sv_csrf borradas
 ```
+
+**Nota de comportamiento (preexistente, no introducida en 6.1):** un refresh ya blacklisteado
+reenviado a `/auth/refresh/` responde **400** `INVALID_TOKEN` en lugar de 401 — `ValidationError`
+en `apps/core/exceptions.py` tiene `status_code` fijo en 400 sin importar el `code=` pasado.
 
 ---
 

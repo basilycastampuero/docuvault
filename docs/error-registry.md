@@ -5,7 +5,7 @@
 > auditorías de cada fase.
 >
 > Uso principal: referencia histórica y fuente para `docs/ai-agent-guide.md`.
-> Última actualización: 2026-07-01. Errores registrados: ERR-001 a ERR-067.
+> Última actualización: 2026-07-03. Errores registrados: ERR-001 a ERR-068.
 
 ---
 
@@ -27,6 +27,7 @@
 | `N_PLUS_1` | ERR-011 |
 | `SOFT_DELETE` | ERR-006 |
 | `UI_OVERFLOW` | ERR-054 |
+| `TEST_QUALITY` | ERR-068 |
 
 ---
 
@@ -1351,3 +1352,21 @@
 **Causa raíz:** Cuando se añadió `ocr_content: string` al tipo `Document` en la feature de 2026-06-30 (exposición del campo OCR en la API), los fixtures de estos dos tests no fueron actualizados para incluir el nuevo campo requerido.
 
 **Solución aplicada:** Añadir `ocr_content: ''` al `MOCK_DOCUMENT` en ambos archivos. Commit `4177596`.
+
+---
+
+## ERR-068: Test de `ProtectedRoute` verde por una razón incorrecta (ausencia de mock de red)
+
+| Campo | Valor |
+|---|---|
+| Fecha | 2026-07-03 |
+| Fase | 6.1 |
+| Severidad | BAJA (calidad de test, no bug de producción) |
+| Categoría | `TEST_QUALITY` |
+| Archivo(s) afectado(s) | `frontend/src/shared/components/__tests__/ProtectedRoute.test.tsx` |
+
+**Descripción:** El test "sin refreshToken en localStorage → redirige a /login" pasaba en verde desde antes de Fase 6.1, pero no verificaba lo que su nombre y su intención indicaban.
+
+**Causa raíz:** El test no configuraba ningún mock de red (ni MSW ni mock de módulo) para la llamada a `refreshToken()` que dispara `ProtectedRoute` al montar. En jsdom, esa request sin handler fallaba con un error de red genérico — y ese error caía, por coincidencia, en el mismo bloque `.catch()` que maneja un 401 real del backend, produciendo el mismo resultado observable (`Navigate` a `/login`). El test aprobaba por un camino de fallo distinto al que pretendía cubrir, no por la lógica de negocio real.
+
+**Solución aplicada:** Detectado al reescribir la suite para el nuevo flujo de cookie httpOnly (que ya no puede decidir de antemano, mirando `localStorage`, si intentar el refresh). Se reemplazó la dependencia de comportamiento de red no configurado por mocks explícitos a nivel de módulo (`vi.mock('@/features/auth/api')` sobre `refreshToken`/`getMe`), permitiendo simular determinísticamente "cookie válida" vs. "cookie ausente/inválida" en cada caso. Commit `6701bc8`.

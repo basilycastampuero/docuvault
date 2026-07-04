@@ -465,7 +465,7 @@ fix/{name}    ← Corrección de bugs
 
 ## 17. Estado actual del proyecto
 
-**Fase actual:** Fases de portafolio COMPLETAS (0–5). 5.1, 5.2, 5.3, 5.4, 5.5 y 5.7 COMPLETAS (5.5 completada 2026-06-29); siguiente: Fase 6 (mejoras post-portafolio).
+**Fase actual:** Fases de portafolio COMPLETAS (0–5). 5.1, 5.2, 5.3, 5.4, 5.5 y 5.7 COMPLETAS (5.5 completada 2026-06-29). Fase 6 (mejoras post-portafolio) en curso: 6.1 COMPLETA (2026-07-03); siguiente: 6.2.
 
 **Completado:**
 - Fase 0 — Setup: WSL2, Docker Compose (PG16+Redis7+MinIO), pre-commit hooks, .env.example
@@ -508,8 +508,9 @@ fix/{name}    ← Corrección de bugs
 - Auditoría 2026-07-01 — Bugs post-testing: crash SearchPage (ocr_status en SearchResultSerializer); tipo SearchResult (Omit<Document,...> + rank); entidades IA invisibles (entities: objeto vs string[])
 - Refactor 2026-07-01 — Baja severidad: fallback ExecutionStatusBadge; Partial<PaginatedMeta> en getVersions; WRITE_ROLES centralizado en shared/lib/roles; cap de polling OCR/workflow; dead code audit eliminado
 - Features 2026-07-01 — FileTypeBadge (PDF/JPG/DOCX/XLSX/PPTX/etc. por mime_type, badge coloreado); fix desbordamiento de nombres largos en DocumentCard (overflow-hidden + min-w-0 en cadena de truncado)
+- Fase 6.1 (2026-07-03) — Refresh token JWT migrado de `localStorage` a cookie `HttpOnly Secure SameSite=Strict` (`sv_refresh`) con protección CSRF double-submit (`sv_csrf` + header `X-CSRF-Token`); `backend/apps/authentication/api/cookies.py` (helpers HTTP puros); `LoginView`/`TokenRefreshView`/`LogoutView` (esta última pasa a `AllowAny`); feature-flag `AUTH_REFRESH_COOKIE_ENABLED` (default on, fallback a body legado); proxy `/api` de Vite en dev (prerrequisito para `SameSite=Strict` cross-origin); `frontend/.env.example` creado (gap cerrado en la misma sub-fase); 4 commits (`76f6dc5`, `0e978eb`, `b2ac8e9`, `6701bc8`)
 
-**Métricas (2026-06-30):** ~526 tests backend (495 normales + 27 `@pytest.mark.integration` + ~4 nuevos) + 169 tests frontend. Cobertura backend: 95%.
+**Métricas (2026-07-03):** 550 tests backend (95.62% cobertura) + 174 tests frontend. 0 errores TypeScript.
 
 **Apps activas:** `apps.core`, `apps.organizations`, `apps.authentication`, `apps.permissions`, `apps.audit`, `apps.documents`, `apps.workflows`, `apps.search`, `apps.notifications`
 
@@ -542,7 +543,7 @@ fix/{name}    ← Corrección de bugs
 25. Health check no se audita.
 26. Sentry gateado por `SENTRY_DSN` vacío. `send_default_pii=False`. Scrubbing de `Authorization` header y bodies de `/auth/`.
 27. JSON logging solo en `production.py`. `RequestContextFilter` inyecta `organization_id`/`user_id`/`request_id`.
-28. `accessToken` en memoria (Zustand), `refreshToken` en `localStorage`. Trade-off XSS documentado; migrar a httpOnly cookies = Fase 6.
+28. `accessToken` en memoria (Zustand), `refreshToken` en `localStorage`. Trade-off XSS documentado; migrar a httpOnly cookies = Fase 6. **Superada por la decisión #41 (Fase 6.1, 2026-07-03).**
 29. Cola de refresh (`isRefreshing+failedQueue`): garantiza exactamente 1 refresh para N 401 concurrentes.
 30. `apps/notifications` es app de dominio (BaseModel + FK org). `workflow_service` la importa lazy para evitar importaciones circulares.
 31. Notificaciones solo al rol exacto del paso (`required_role`). Solo en "paso asignado". Reject/cancel/complete = futuro.
@@ -555,8 +556,9 @@ fix/{name}    ← Corrección de bugs
 38. Paginación en listas de workflows (templates/executions) aplazada: las páginas de lista muestran solo la primera página. El componente `<Pagination>` y el soporte de backend ya existen; pendiente de conectar. Deuda anotada para 5.4/5.5.
 39. `FOLDER_UNSET = object()` sentinel en `document_service`: distingue "campo `folder_id` ausente del PATCH" de "usuario quiere mover a raíz (`folder=null`)". Sin sentinel, cualquier PATCH que no incluya `folder_id` movería el documento a la raíz.
 40. Endpoint `POST /documents/{id}/start-workflow/` vive en `documents/api/views.py` (no en workflows). Convención: cada `urls.py` importa solo views de su propia app. La dependencia cruzada `documents.views → workflows.services` es legítima en la capa de orquestación (una view puede llamar services de otro dominio).
+41. Refresh token de JWT vive en cookie `HttpOnly Secure SameSite=Strict` (`sv_refresh`), no en `localStorage` (supera la decisión #28). Access sigue en memoria. Protección CSRF double-submit (`sv_csrf` + header `X-CSRF-Token`) en refresh/logout. Rollout con feature-flag `AUTH_REFRESH_COOKIE_ENABLED` (default on, fallback a body legado). `LogoutView` es `AllowAny` — la identidad la da el refresh+blacklist, no el access.
 
-**Próximo paso:** Proyecto completado en sus fases de portafolio (Fases 0–5). El backlog de Fase 6 (7 sub-fases, `docs/phase-plan.md` §'Fase 6 — Mejoras post-portafolio') fue validado contra el código real el 2026-07-03 — vigente sin invalidaciones. Sub-fase recomendada para empezar: **6.1 — JWT en cookies httpOnly** (cero dependencias, cierra la deuda de seguridad #28, sin migraciones).
+**Próximo paso:** Proyecto completado en sus fases de portafolio (Fases 0–5). Fase 6 (mejoras post-portafolio) en curso: **6.1 — JWT en cookies httpOnly COMPLETA (2026-07-03)**. Sub-fase recomendada para continuar: **6.2 — Enriquecimiento documental** (thumbnails + extracción de texto Office), según el orden documentado en `docs/phase-plan.md` §'Orden de implementación recomendado'.
 
 ## 18. Cómo correr el proyecto localmente
 

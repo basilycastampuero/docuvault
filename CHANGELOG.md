@@ -9,6 +9,28 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [6.1] — 2026-07-03
+
+Fase 6.1: refresh token JWT migrado de `localStorage` a cookie httpOnly con protección CSRF.
+
+### Security
+- `76f6dc5` Refresh token de JWT ya no viaja en el body de `/auth/login/` ni se persiste en `localStorage`: ahora vive en cookie `HttpOnly Secure SameSite=Strict` (`sv_refresh`), inaccesible a JavaScript y por lo tanto a XSS
+- `76f6dc5` Protección CSRF double-submit en `/auth/refresh/` y `/auth/logout/`: cookie no-HttpOnly `sv_csrf` + header `X-CSRF-Token`, comparados con `secrets.compare_digest`
+- `76f6dc5` `LogoutView` pasa de `IsAuthenticated` a `AllowAny`: la identidad válida para cerrar sesión la da el refresh (vía cookie) + su blacklist, no un `access` que puede haber expirado
+- `76f6dc5` Rollout controlado por feature-flag `AUTH_REFRESH_COOKIE_ENABLED` (activado por defecto, con fallback a leer el refresh del body si no hay cookie)
+- `b2ac8e9` Frontend deja de leer/escribir `refreshToken` en `localStorage`; `api-client.ts` usa `withCredentials: true` y adjunta `X-CSRF-Token` automáticamente en refresh/logout
+- `b2ac8e9` Proxy `/api` de Vite (`vite.config.ts`) para same-origin en dev, prerrequisito de `SameSite=Strict`
+
+### Added
+- `0e978eb` Tests backend (`test_auth_cookie.py`): cookie de login, refresh con/sin cookie, CSRF ausente/incorrecto, aislamiento de tenant, flag desactivado = comportamiento legado
+- `6701bc8` Tests frontend actualizados para el flujo de cookie: interceptor, store y bootstrap de `ProtectedRoute` sin dependencia de `localStorage`
+- Creado `frontend/.env.example` (gap detectado durante esta sub-fase; no existía)
+
+### Changed
+- Documentado el uso relativo de `VITE_API_BASE_URL=/api/v1` en dev (antes absoluto a `localhost:8000`), requerido para que el proxy de Vite entregue la cookie same-origin
+
+---
+
 ## [post-5.5] — 2026-07-01
 
 Correcciones y mejoras de calidad tras las pruebas post-portafolio.

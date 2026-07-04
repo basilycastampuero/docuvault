@@ -11,9 +11,72 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Validación del backlog de Fase 6 y arranque planificado de 6.1** (2026-07-03).
-> Rama `feature/5.2-frontend-documents`.
-> Proyecto de portafolio completado (Fases 0–5). Fase 6 = mejoras post-portafolio, en planificación.
+> Última actualización: **Fase 6.1 (JWT en cookies httpOnly) implementada y testeada completa**
+> (2026-07-03). Rama `feature/5.2-frontend-documents`.
+> Proyecto de portafolio completado (Fases 0–5). Fase 6 = mejoras post-portafolio, en ejecución
+> (6.1 completa, 6.2 siguiente).
+
+---
+
+### 2026-07-03 — Fase 6.1 implementada: refresh token de cookie httpOnly + CSRF (4 commits)
+
+Mismo día en que se validó el backlog de Fase 6 (ver entrada siguiente, cronológicamente anterior),
+se implementó y testeó por completo la sub-fase elegida para arrancar: **6.1 — JWT en cookies
+httpOnly**.
+
+**El problema que cierra.** Desde Fase 5.1 (decisión #28) el `refreshToken` vivía en
+`localStorage`: cualquier XSS en la aplicación podía leerlo y mantener una sesión válida
+indefinidamente, sin necesidad de robar credenciales. Es la deuda de seguridad de mayor severidad
+del proyecto — el tipo de cosa que un revisor senior busca primero en un SaaS.
+
+**La solución.** El refresh ahora viaja en una cookie `HttpOnly Secure SameSite=Strict`
+(`sv_refresh`), invisible a JavaScript: un XSS ya no puede leerla. El `access` se queda en memoria
+(Zustand) como antes. Como la cookie viaja automáticamente con cada request al dominio, hace falta
+protección CSRF en los dos endpoints que la usan (`/auth/refresh/`, `/auth/logout/`): patrón
+double-submit con una segunda cookie no-HttpOnly (`sv_csrf`) que el cliente lee y reenvía como
+header `X-CSRF-Token`; el backend compara ambos valores con `secrets.compare_digest`. Todo detrás
+del feature-flag `AUTH_REFRESH_COOKIE_ENABLED` (activado por defecto, con fallback a leer el
+refresh del body si no hay cookie, para permitir un rollout gradual sin romper clientes viejos).
+
+Un ajuste no anticipado en el plan original: `LogoutView` exigía `IsAuthenticated`, lo que
+significa que un `access` ya expirado (típico si el usuario dejó la pestaña abierta) impediría
+cerrar sesión. Se cambió a `AllowAny` — la identidad válida para hacer logout la da el propio
+refresh (vía su cookie) más su blacklist, no el access. El logout quedó además deliberadamente
+idempotente: si el refresh ya estaba blacklisteado o era inválido, no lanza error (solo
+`logger.warning`) y de todos modos limpia la cookie.
+
+**El prerrequisito que no era opcional: el proxy de Vite.** `SameSite=Strict` solo entrega la
+cookie si la request es same-origin. En dev, Vite corre en `:5173` y Django en `:8000` — dos
+orígenes distintos — así que sin un proxy la cookie de refresh nunca hubiera llegado al backend.
+Se agregó `server.proxy['/api']` en `frontend/vite.config.ts` apuntando a `localhost:8000`, y con
+eso `frontend/src/lib/api-client.ts` pasó a usar `withCredentials: true`. Un detalle que se
+descubrió recién al integrar: el proxy solo sirve si el cliente pide URLs *relativas*
+(`/api/v1/...`). `VITE_API_BASE_URL` seguía apuntando a `http://localhost:8000/api/v1` en
+`.env.development` (valor heredado de Fase 5.1) — con eso las requests seguían siendo cross-origin
+por más proxy que hubiera, y el ajuste no estaba en el plan de ejecución original de 6.1. Se
+corrigió a `/api/v1` (mismo valor relativo que ya usaba `.env.production`). Como `.env.development`
+está en `.gitignore`, el cambio no quedó versionado por sí solo — lo que sí expuso un gap real:
+**`frontend/.env.example` no existía** (a diferencia de `backend/.env.example`, que CLAUDE.md §10
+exige). Sin ese archivo, cualquier clon nuevo del repo no tiene forma de saber que necesita esa
+variable en modo relativo para que el proxy funcione. Se creó `frontend/.env.example` como parte
+de esta misma tarea de documentación.
+
+**Un test verde por la razón equivocada.** El test de `ProtectedRoute` "sin sesión guardada →
+redirige a /login" pasaba desde antes de este cambio, pero por accidente: no tenía ningún mock de
+red configurado, así que en jsdom la request al backend fallaba con un error de red genérico —
+y ese error caía, por coincidencia, en el mismo `.catch()` que un 401 real. El test nunca verificó
+lo que decía verificar. Se detectó al reescribir la suite para el nuevo flujo (la cookie es
+invisible a JS, así que el bootstrap ya no puede decidir de antemano si intentar el refresh
+mirando `localStorage`: ahora siempre lo intenta, y deja que el backend responda 401 si no hay
+cookie válida) y se corrigió mockeando `refreshToken`/`getMe` a nivel de módulo en lugar de
+depender de comportamiento de red no configurado. Buena anécdota de que un test en verde no es
+sinónimo de un test correcto.
+
+**Resultado final:** 550 tests backend (95.62% cobertura, sube desde el ~95% de fin de Fase 5) +
+174 tests frontend (sube desde 169), 0 errores de TypeScript. 4 commits: `76f6dc5` (backend),
+`0e978eb` (tests backend), `b2ac8e9` (frontend), `6701bc8` (tests frontend). Detalle completo del
+plan de ejecución en `docs/phase-plan.md` §6.1; decisión de diseño registrada como **#41** en
+`CLAUDE.md` §17 (supera la #28).
 
 ---
 

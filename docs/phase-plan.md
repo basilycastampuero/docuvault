@@ -1795,7 +1795,8 @@ frontend/
   tailwind.config.ts
   postcss.config.js
   components.json                       # config de shadcn/ui
-  .env.development                      # VITE_API_BASE_URL=http://localhost:8000/api/v1
+  .env.development                      # VITE_API_BASE_URL=http://localhost:8000/api/v1 (valor de Fase 5.1;
+                                         # ver nota [1] al pie de esta sección)
   .env.production                       # VITE_API_BASE_URL=/api/v1  (mismo origen vía Nginx)
   src/
     main.tsx                            # bootstrap: QueryClientProvider + RouterProvider
@@ -1819,6 +1820,13 @@ frontend/
         pages/LoginPage.tsx
         types.ts
 ```
+
+**[1]** El valor `http://localhost:8000/api/v1` de `.env.development` es un registro histórico de
+cómo se configuró esta variable en Fase 5.1. Desde **Fase 6.1** (2026-07-03) pasó a ser relativo
+(`VITE_API_BASE_URL=/api/v1`, igual que en producción): con la migración del refresh token a cookie
+`SameSite=Strict`, una URL absoluta vuelve la request cross-origin y el navegador no adjunta la
+cookie. `frontend/vite.config.ts` añadió `server.proxy['/api']` para mantener same-origin en dev.
+Ver `frontend/.env.example` (creado en 6.1) y §6.1 más abajo.
 
 #### Piezas a implementar
 
@@ -2631,6 +2639,9 @@ Meta de cobertura backend: mantener ≥ 95% (gate de CI de Fase 5.4). El fronten
 tests frontend. Todo el CI en verde. Apps de dominio activas: core, organizations, authentication,
 permissions, audit, documents, workflows, search, notifications (billing dormido).
 
+**Métricas tras 6.1 (2026-07-03):** 550 tests backend (95.62% cobertura) + 174 tests frontend, 0
+errores TypeScript.
+
 **Invariantes que Fase 6 respeta sin excepción (CLAUDE.md §2–16):** NUNCA microservicios; separación
 models/services/selectors/api; toda entidad de dominio nueva hereda `BaseModel` + FK obligatoria a
 `Organization`; selectors reciben `organization` explícito; auditoría desde services; soft delete en
@@ -2642,7 +2653,7 @@ contra PostgreSQL real con test explícito de aislamiento de tenant.
 
 | Sub-fase | Área | Cierra deuda | Skill de portafolio | Toca BE | Toca FE | Toca infra | Compl. |
 |----------|------|--------------|---------------------|:---:|:---:|:---:|:---:|
-| 6.1 | JWT en cookies httpOnly | #28 | Seguridad de auth / XSS-CSRF | ✅ | ✅ | — | M |
+| 6.1 ✅ 2026-07-03 | JWT en cookies httpOnly | #28→#41 | Seguridad de auth / XSS-CSRF | ✅ | ✅ | — | M |
 | 6.2 | Enriquecimiento documental (thumbnails + texto Office) | Diferidos #3, #4 | Pipeline async de media | ✅ | ✅ | — | M |
 | 6.3 | Notificaciones in-app en tiempo real | #34, diferido notif. | Realtime (SSE) + entrega exactly-once | ✅ | ✅ | — | L |
 | 6.4 | Observabilidad avanzada | Diferidos #5, #6 | SRE / métricas / monitoreo | ✅ | — | ✅ | M |
@@ -2669,7 +2680,7 @@ contra PostgreSQL real con test explícito de aislamiento de tenant.
 
 ---
 
-### 6.1 — JWT en cookies httpOnly (endurecimiento de autenticación)
+### 6.1 — JWT en cookies httpOnly (endurecimiento de autenticación) — ✅ COMPLETADA (2026-07-03)
 
 **Objetivo.** Migrar el almacenamiento de tokens desde `accessToken` en memoria + `refreshToken` en
 `localStorage` (decisión #28) a un esquema resistente a XSS: refresh token en cookie `HttpOnly`
@@ -2760,6 +2771,28 @@ Commits sugeridos (conventional commits, uno por subtarea):
   Frontend — cola de refresh sigue garantizando 1 solo refresh para N 401 concurrentes vía cookie.
 
 **Complejidad:** M. **Riesgo:** medio — rollout con feature-flag recomendado.
+
+#### Entregable 6.1 — ✅ COMPLETADO (2026-07-03, commits `76f6dc5`, `0e978eb`, `b2ac8e9`, `6701bc8`)
+- [x] Settings de cookie vía `python-decouple` (`AUTH_REFRESH_COOKIE_ENABLED`, `_NAME`, `_PATH`,
+      `_SAMESITE`, `_SECURE`, `_HTTPONLY`, `AUTH_CSRF_COOKIE_NAME`); `_SECURE=False` en dev/test.
+- [x] `backend/apps/authentication/api/cookies.py` — helpers HTTP puros (`set_refresh_cookie`,
+      `clear_refresh_cookie`, `issue_csrf_cookie`, `get_refresh_from_cookie`, `validate_csrf`).
+- [x] `LoginView` setea `sv_refresh` (HttpOnly) + `sv_csrf` (no-HttpOnly); refresh ya no viaja en el body.
+- [x] `TokenRefreshView` lee de cookie (fallback a body para rollout), valida CSRF (403
+      `CSRF_INVALID` si falla), re-setea la cookie tras rotar.
+- [x] `LogoutView` pasa a `AllowAny`; valida CSRF; idempotente ante refresh ya blacklisteado/inválido.
+- [x] Tests backend nuevos (`test_auth_cookie.py`): login/refresh/logout con cookie, CSRF
+      ausente/incorrecto, aislamiento de tenant, flag apagado = comportamiento legado.
+- [x] `frontend/vite.config.ts` — `server.proxy['/api']` (prerrequisito duro para `SameSite=Strict` en dev).
+- [x] `frontend/src/lib/api-client.ts` — `withCredentials: true`; header `X-CSRF-Token` automático en
+      `/auth/refresh/` y `/auth/logout/`; cola `isRefreshing`/`failedQueue` (decisión #29) intacta.
+- [x] `store.ts`/`hooks.ts`/`api.ts`/`types.ts`/`ProtectedRoute.tsx` — ya no leen/escriben
+      `refreshToken` en `localStorage`; bootstrap siempre intenta `refreshToken()` si no hay
+      `accessToken` en memoria.
+- [x] `frontend/.env.example` creado (gap detectado en esta misma sub-fase: no existía).
+- [x] 550 tests backend (95.62% cobertura) + 174 tests frontend, 0 errores TypeScript.
+
+Ver decisión de diseño **#41** en `CLAUDE.md` §17 y la entrada de BITÁCORA del 2026-07-03.
 
 ---
 
@@ -3010,6 +3043,10 @@ segundo entorno (staging VPS o mismo VPS con red separada).
 **Validado 2026-07-03:** el backlog de Fase 6 fue auditado contra el estado real del código; las 7
 sub-fases siguen vigentes sin invalidaciones. Sub-fase recomendada para empezar: **6.1** (cero
 dependencias, cierra la deuda de seguridad de mayor severidad, sin migraciones).
+
+**6.1 completada el mismo día (2026-07-03).** Ver `#### Entregable 6.1` más arriba. Siguiente
+sub-fase recomendada: **6.2** (enriquecimiento documental — thumbnails + extracción de texto Office),
+según el orden documentado en "Orden de implementación recomendado" más abajo.
 
 ---
 
