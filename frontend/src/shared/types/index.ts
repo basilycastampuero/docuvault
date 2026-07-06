@@ -51,6 +51,8 @@ export class ApiError extends Error {
 
 export type OcrStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'skipped'
 
+export type ThumbnailStatus = 'pending' | 'processing' | 'ready' | 'failed' | 'skipped'
+
 export type DocumentStatus =
   | 'draft'
   | 'under_review'
@@ -78,6 +80,8 @@ export interface Document {
   version: number
   ocr_status: OcrStatus
   ocr_content: string
+  thumbnail_status: ThumbnailStatus
+  thumbnail_url: string | null
   tags: string[]
   metadata: Record<string, unknown>
   folder: string | null
@@ -87,7 +91,11 @@ export interface Document {
   updated_at: string
 }
 
-export interface SearchResult extends Omit<Document, 'checksum' | 'metadata' | 'ocr_content'> {
+export interface SearchResult
+  extends Omit<
+    Document,
+    'checksum' | 'metadata' | 'ocr_content' | 'thumbnail_status' | 'thumbnail_url'
+  > {
   rank: number
 }
 

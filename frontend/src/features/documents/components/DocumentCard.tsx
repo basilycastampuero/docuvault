@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom'
-import { FileText, Download, MoreVertical, Trash2, Eye } from 'lucide-react'
+import { Download, MoreVertical, Trash2, Eye } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { Card, CardContent } from '@/components/ui/card'
@@ -16,6 +16,7 @@ import type { Document } from '@/shared/types'
 import { useAuthStore } from '@/features/auth/store'
 import { OcrStatusBadge } from './OcrStatusBadge'
 import { FileTypeBadge } from './FileTypeBadge'
+import { DocumentThumbnail } from './DocumentThumbnail'
 import { useDownloadDocument } from '../hooks'
 import { WRITE_ROLES } from '@/shared/lib/roles'
 
@@ -65,7 +66,13 @@ export function DocumentCard({ document, onDelete }: DocumentCardProps) {
       <CardContent className="p-4 space-y-3">
         <div className="flex items-start justify-between gap-2 min-w-0">
           <div className="flex items-start gap-3 min-w-0 flex-1">
-            <FileText className="h-8 w-8 shrink-0 text-primary mt-0.5" />
+            <DocumentThumbnail
+              className="h-10 w-10 shrink-0 rounded-md"
+              status={document.thumbnail_status}
+              url={document.thumbnail_url}
+              mimeType={document.mime_type}
+              fit="cover"
+            />
             <div className="min-w-0">
               <p className="font-medium text-sm truncate">{document.name}</p>
               <p className="text-xs text-muted-foreground">

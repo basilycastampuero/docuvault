@@ -15,9 +15,17 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuthStore } from '@/features/auth/store'
 import { OcrStatusBadge } from '../components/OcrStatusBadge'
+import { ThumbnailStatusBadge } from '../components/ThumbnailStatusBadge'
+import { DocumentThumbnail } from '../components/DocumentThumbnail'
 import { DocumentVersionList } from '../components/DocumentVersionList'
 import { DocumentMetadataForm } from '../components/DocumentMetadataForm'
-import { useDocument, useDownloadDocument, useReprocessOcr, useRequestAiAnalysis } from '../hooks'
+import {
+  useDocument,
+  useDownloadDocument,
+  useReprocessOcr,
+  useRequestAiAnalysis,
+  useRegenerateThumbnail,
+} from '../hooks'
 import { useWorkflowTemplates } from '@/features/workflows/hooks'
 import { StartWorkflowDialog } from '@/features/workflows/components/StartWorkflowDialog'
 import { WRITE_ROLES } from '@/shared/lib/roles'
@@ -180,6 +188,7 @@ export function DocumentDetailPage() {
   const download = useDownloadDocument()
   const reprocessOcr = useReprocessOcr()
   const requestAiAnalysis = useRequestAiAnalysis()
+  const regenerateThumbnail = useRegenerateThumbnail()
 
   const { data: templatesData } = useWorkflowTemplates()
   const activeTemplates = templatesData?.items.filter((t) => t.is_active) ?? []
@@ -369,6 +378,39 @@ export function DocumentDetailPage() {
 
         {/* Right column: metadata */}
         <div className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Vista previa</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <DocumentThumbnail
+                className="aspect-[4/3] w-full"
+                status={document.thumbnail_status}
+                url={document.thumbnail_url}
+                mimeType={document.mime_type}
+                fit="contain"
+              />
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <ThumbnailStatusBadge status={document.thumbnail_status} />
+                {canWrite &&
+                  (document.thumbnail_status === 'failed' ||
+                    document.thumbnail_status === 'ready') && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => regenerateThumbnail.mutate(document.id)}
+                      disabled={regenerateThumbnail.isPending}
+                    >
+                      <RefreshCw
+                        className={`mr-2 h-4 w-4 ${regenerateThumbnail.isPending ? 'animate-spin' : ''}`}
+                      />
+                      Regenerar miniatura
+                    </Button>
+                  )}
+              </div>
+            </CardContent>
+          </Card>
+
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Información</CardTitle>

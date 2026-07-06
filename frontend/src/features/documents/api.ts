@@ -130,6 +130,10 @@ export const documentsApi = {
   requestAiAnalysis: async (id: string): Promise<void> => {
     await apiClient.post(`/documents/${id}/analyze/`)
   },
+
+  regenerateThumbnail: async (id: string): Promise<void> => {
+    await apiClient.post(`/documents/${id}/regenerate-thumbnail/`)
+  },
 }
 
 export const foldersApi = {

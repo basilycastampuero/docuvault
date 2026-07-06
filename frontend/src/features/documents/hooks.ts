@@ -34,10 +34,14 @@ export function useDocument(id: string, pollForAi = false) {
     enabled: !!id,
     refetchInterval: (query) => {
       const ocrStatus = query.state.data?.ocr_status
+      const thumbnailStatus = query.state.data?.thumbnail_status
       const updateCount = query.state.dataUpdateCount ?? 0
-      // Cap OCR polling at ~2 min (40 × 3s)
-      if (updateCount > 40 && (ocrStatus === 'pending' || ocrStatus === 'processing')) return false
-      if (ocrStatus === 'pending' || ocrStatus === 'processing') return 3000
+      const ocrActive = ocrStatus === 'pending' || ocrStatus === 'processing'
+      const thumbnailActive = thumbnailStatus === 'pending' || thumbnailStatus === 'processing'
+      const active = ocrActive || thumbnailActive
+      // Cap OCR/thumbnail polling at ~2 min (40 × 3s)
+      if (updateCount > 40 && active) return false
+      if (active) return 3000
       if (!pollForAi) return false
       const aiAnalysis = query.state.data?.metadata?.ai_analysis as
         | { status?: string }
@@ -166,5 +170,16 @@ export function useRequestAiAnalysis() {
       queryClient.invalidateQueries({ queryKey: documentKeys.detail(id) })
     },
     meta: { suppressGlobalToast: true },
+  })
+}
+
+export function useRegenerateThumbnail() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (id: string) => documentsApi.regenerateThumbnail(id),
+    onSuccess: (_data, id) => {
+      queryClient.invalidateQueries({ queryKey: documentKeys.detail(id) })
+    },
   })
 }
