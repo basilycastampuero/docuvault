@@ -52,6 +52,8 @@ const MOCK_DOCUMENT: Document = {
   tags: [],
   metadata: {},
   ocr_content: '',
+  thumbnail_status: 'pending',
+  thumbnail_url: null,
   folder: null,
   folder_name: null,
   created_by_email: 'editor@acme.com',

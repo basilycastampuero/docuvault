@@ -2,9 +2,10 @@
  * Tests for useDocument — specifically the refetchInterval polling logic.
  *
  * Strategy: mock `./api` so documentsApi.getById resolves with a document
- * whose ocr_status we control. Render the hook inside a QueryClientProvider
- * and wait for data to load. Then inspect the TanStack Query observer options
- * to confirm the refetchInterval function returns the correct value.
+ * whose ocr_status/thumbnail_status we control. Render the hook inside a
+ * QueryClientProvider and wait for data to load. Then inspect the TanStack
+ * Query observer options to confirm the refetchInterval function returns the
+ * correct value.
  *
  * TanStack Query v5 passes a `Query` object to the refetchInterval callback.
  * `query.state.data` holds the last resolved value. By seeding the cache with
@@ -12,19 +13,23 @@
  *
  * All tests use a fresh QueryClient (retry:0, gcTime:0) so queries don't bleed
  * between test cases.
+ *
+ * Also covers useRegenerateThumbnail — the mutation used by the "Regenerar
+ * miniatura" button on DocumentDetailPage.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createElement } from 'react'
-import type { Document, OcrStatus } from '@/shared/types'
-import { useDocument } from '../hooks'
+import type { Document, OcrStatus, ThumbnailStatus } from '@/shared/types'
+import { useDocument, useRegenerateThumbnail, documentKeys } from '../hooks'
 
 // ─── Mock the documents API ───────────────────────────────────────────────────
 // We need to control what getById returns without a real network request.
 
 const mockGetById = vi.fn()
+const mockRegenerateThumbnail = vi.fn()
 
 vi.mock('../api', () => ({
   documentsApi: {
@@ -38,12 +43,17 @@ vi.mock('../api', () => ({
     getVersions: vi.fn(),
     uploadVersion: vi.fn(),
     reprocessOcr: vi.fn(),
+    requestAiAnalysis: vi.fn(),
+    regenerateThumbnail: (...args: unknown[]) => mockRegenerateThumbnail(...args),
   },
 }))
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function makeDocument(ocr_status: OcrStatus): Document {
+function makeDocument(
+  ocr_status: OcrStatus,
+  thumbnail_status: ThumbnailStatus = 'ready',
+): Document {
   return {
     id: 'doc-test-id',
     name: 'test.pdf',
@@ -55,6 +65,8 @@ function makeDocument(ocr_status: OcrStatus): Document {
     version: 1,
     ocr_status,
     ocr_content: '',
+    thumbnail_status,
+    thumbnail_url: thumbnail_status === 'ready' ? 'https://minio.local/thumb.jpg' : null,
     tags: [],
     metadata: {},
     folder: null,
@@ -95,143 +107,205 @@ afterEach(() => {
 })
 
 // ─── refetchInterval logic ────────────────────────────────────────────────────
+//
+// Rather than re-implementing the polling rule inline (which can silently
+// drift from the real hook), these tests pull the ACTUAL refetchInterval
+// function off the live query's options and invoke it with a fake query
+// state. This exercises the real production logic, including the OCR/
+// thumbnail combination and the 40-update polling cap.
 
-describe('useDocument — refetchInterval polling logic', () => {
+type RefetchIntervalFn = (query: {
+  state: { data?: Document; dataUpdateCount?: number }
+}) => number | false
+
+function getRefetchIntervalFn(qc: QueryClient, id: string): RefetchIntervalFn {
+  const query = qc.getQueryCache().find({ queryKey: documentKeys.detail(id) })
+  if (!query) throw new Error('Query not found in cache — did the hook mount?')
+  // `refetchInterval` is an observer-only option (QueryObserverOptions) that
+  // is not part of the base `Query.options` type (QueryOptions), even though
+  // it is present on the runtime object built by useQuery. Cast is required.
+  const options = query.options as unknown as { refetchInterval?: unknown }
+  const fn = options.refetchInterval
+  if (typeof fn !== 'function') {
+    throw new Error('refetchInterval is not a function on this query')
+  }
+  return fn as RefetchIntervalFn
+}
+
+describe('useDocument — refetchInterval polling logic (OCR)', () => {
   it('returns 3000ms interval when ocr_status is pending', async () => {
     /**Should poll every 3s while OCR is waiting to start */
     const qc = makeQueryClient()
-    mockGetById.mockResolvedValue(makeDocument('pending'))
+    mockGetById.mockResolvedValue(makeDocument('pending', 'ready'))
 
-    const { result } = renderHook(() => useDocument('doc-test-id'), {
-      wrapper: makeWrapper(qc),
-    })
+    renderHook(() => useDocument('doc-test-id'), { wrapper: makeWrapper(qc) })
+    await waitFor(() => expect(mockGetById).toHaveBeenCalled())
 
-    // Wait for the query to succeed so data is in the cache
-    await waitFor(() => expect(result.current.isSuccess).toBe(true))
-
-    // Extract the refetchInterval function from the query options and call it
-    // with a fake query object that mirrors TanStack Query v5's Query shape.
-    const query = qc.getQueryCache().find({ queryKey: ['documents', 'doc-test-id'] })
-    expect(query).toBeDefined()
-
-    // The document data should be in the query state
-    expect(result.current.data?.ocr_status).toBe('pending')
-
-    // Now invoke the refetchInterval callback with the actual live query
-    // by checking the observer. Since we can't access observers directly,
-    // we verify by reading the data and asserting the expected interval value
-    // matches the implementation: pending → 3000.
-    //
-    // We call the refetchInterval function inline to test the logic:
-    const refetchFn = (queryState: { state: { data?: Document | undefined } }) => {
-      const status = queryState.state.data?.ocr_status
-      if (status === 'pending' || status === 'processing') return 3000
-      return false
-    }
-
-    // Construct a minimal query-like object with the resolved data
-    const fakeQuery = { state: { data: result.current.data } }
-    expect(refetchFn(fakeQuery)).toBe(3000)
+    const refetchInterval = getRefetchIntervalFn(qc, 'doc-test-id')
+    const doc = makeDocument('pending', 'ready')
+    expect(refetchInterval({ state: { data: doc, dataUpdateCount: 1 } })).toBe(3000)
   })
 
   it('returns 3000ms interval when ocr_status is processing', async () => {
     /**Should continue polling every 3s while OCR is actively running */
     const qc = makeQueryClient()
-    mockGetById.mockResolvedValue(makeDocument('processing'))
+    mockGetById.mockResolvedValue(makeDocument('processing', 'ready'))
 
-    const { result } = renderHook(() => useDocument('doc-test-id'), {
-      wrapper: makeWrapper(qc),
-    })
+    renderHook(() => useDocument('doc-test-id'), { wrapper: makeWrapper(qc) })
+    await waitFor(() => expect(mockGetById).toHaveBeenCalled())
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    expect(result.current.data?.ocr_status).toBe('processing')
-
-    const refetchFn = (queryState: { state: { data?: Document | undefined } }) => {
-      const status = queryState.state.data?.ocr_status
-      if (status === 'pending' || status === 'processing') return 3000
-      return false
-    }
-
-    const fakeQuery = { state: { data: result.current.data } }
-    expect(refetchFn(fakeQuery)).toBe(3000)
+    const refetchInterval = getRefetchIntervalFn(qc, 'doc-test-id')
+    const doc = makeDocument('processing', 'ready')
+    expect(refetchInterval({ state: { data: doc, dataUpdateCount: 1 } })).toBe(3000)
   })
 
-  it('returns false (no polling) when ocr_status is completed', async () => {
-    /**Should stop polling once OCR finishes successfully */
+  it('returns false (no polling) when both ocr_status and thumbnail_status are terminal', async () => {
+    /**Should stop polling once both background jobs finished (successfully or not) */
     const qc = makeQueryClient()
-    mockGetById.mockResolvedValue(makeDocument('completed'))
+    mockGetById.mockResolvedValue(makeDocument('completed', 'ready'))
 
-    const { result } = renderHook(() => useDocument('doc-test-id'), {
-      wrapper: makeWrapper(qc),
-    })
+    renderHook(() => useDocument('doc-test-id'), { wrapper: makeWrapper(qc) })
+    await waitFor(() => expect(mockGetById).toHaveBeenCalled())
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    expect(result.current.data?.ocr_status).toBe('completed')
-
-    const refetchFn = (queryState: { state: { data?: Document | undefined } }) => {
-      const status = queryState.state.data?.ocr_status
-      if (status === 'pending' || status === 'processing') return 3000
-      return false
-    }
-
-    const fakeQuery = { state: { data: result.current.data } }
-    expect(refetchFn(fakeQuery)).toBe(false)
+    const refetchInterval = getRefetchIntervalFn(qc, 'doc-test-id')
+    const doc = makeDocument('completed', 'ready')
+    expect(refetchInterval({ state: { data: doc, dataUpdateCount: 1 } })).toBe(false)
   })
 
-  it('returns false (no polling) when ocr_status is failed', async () => {
+  it('returns false (no polling) when ocr_status is failed and thumbnail is ready', async () => {
     /**Should not poll after a failed OCR run — no automatic retry from the client */
     const qc = makeQueryClient()
-    mockGetById.mockResolvedValue(makeDocument('failed'))
+    mockGetById.mockResolvedValue(makeDocument('failed', 'ready'))
 
-    const { result } = renderHook(() => useDocument('doc-test-id'), {
-      wrapper: makeWrapper(qc),
-    })
+    renderHook(() => useDocument('doc-test-id'), { wrapper: makeWrapper(qc) })
+    await waitFor(() => expect(mockGetById).toHaveBeenCalled())
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    expect(result.current.data?.ocr_status).toBe('failed')
-
-    const refetchFn = (queryState: { state: { data?: Document | undefined } }) => {
-      const status = queryState.state.data?.ocr_status
-      if (status === 'pending' || status === 'processing') return 3000
-      return false
-    }
-
-    const fakeQuery = { state: { data: result.current.data } }
-    expect(refetchFn(fakeQuery)).toBe(false)
+    const refetchInterval = getRefetchIntervalFn(qc, 'doc-test-id')
+    const doc = makeDocument('failed', 'ready')
+    expect(refetchInterval({ state: { data: doc, dataUpdateCount: 1 } })).toBe(false)
   })
 
-  it('returns false (no polling) when ocr_status is skipped', async () => {
-    /**Should not poll for office documents where OCR was intentionally skipped */
+  it('returns false (no polling) when ocr_status is skipped and thumbnail is skipped', async () => {
+    /**Should not poll for office documents where OCR and thumbnails were both bypassed */
     const qc = makeQueryClient()
-    mockGetById.mockResolvedValue(makeDocument('skipped'))
+    mockGetById.mockResolvedValue(makeDocument('skipped', 'skipped'))
 
-    const { result } = renderHook(() => useDocument('doc-test-id'), {
-      wrapper: makeWrapper(qc),
-    })
+    renderHook(() => useDocument('doc-test-id'), { wrapper: makeWrapper(qc) })
+    await waitFor(() => expect(mockGetById).toHaveBeenCalled())
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    expect(result.current.data?.ocr_status).toBe('skipped')
-
-    const refetchFn = (queryState: { state: { data?: Document | undefined } }) => {
-      const status = queryState.state.data?.ocr_status
-      if (status === 'pending' || status === 'processing') return 3000
-      return false
-    }
-
-    const fakeQuery = { state: { data: result.current.data } }
-    expect(refetchFn(fakeQuery)).toBe(false)
+    const refetchInterval = getRefetchIntervalFn(qc, 'doc-test-id')
+    const doc = makeDocument('skipped', 'skipped')
+    expect(refetchInterval({ state: { data: doc, dataUpdateCount: 1 } })).toBe(false)
   })
 
-  it('returns false when data is undefined (query not yet loaded)', () => {
+  it('returns false when data is undefined (query not yet loaded)', async () => {
     /**Should not schedule a refetch when there is no data yet in the cache */
-    const refetchFn = (queryState: { state: { data?: Document | undefined } }) => {
-      const status = queryState.state.data?.ocr_status
-      if (status === 'pending' || status === 'processing') return 3000
-      return false
-    }
+    const qc = makeQueryClient()
+    mockGetById.mockResolvedValue(makeDocument('pending', 'ready'))
 
-    const fakeQuery = { state: { data: undefined } }
-    expect(refetchFn(fakeQuery)).toBe(false)
+    renderHook(() => useDocument('doc-test-id'), { wrapper: makeWrapper(qc) })
+    await waitFor(() => expect(mockGetById).toHaveBeenCalled())
+
+    const refetchInterval = getRefetchIntervalFn(qc, 'doc-test-id')
+    expect(refetchInterval({ state: { data: undefined, dataUpdateCount: 0 } })).toBe(false)
+  })
+})
+
+describe('useDocument — refetchInterval polling logic (thumbnail)', () => {
+  it('keeps polling when thumbnail_status is pending even though ocr_status is terminal', async () => {
+    /**Should not stop polling early just because OCR finished — the thumbnail
+     * job is independent and may still be running */
+    const qc = makeQueryClient()
+    mockGetById.mockResolvedValue(makeDocument('completed', 'pending'))
+
+    renderHook(() => useDocument('doc-test-id'), { wrapper: makeWrapper(qc) })
+    await waitFor(() => expect(mockGetById).toHaveBeenCalled())
+
+    const refetchInterval = getRefetchIntervalFn(qc, 'doc-test-id')
+    const doc = makeDocument('completed', 'pending')
+    expect(refetchInterval({ state: { data: doc, dataUpdateCount: 1 } })).toBe(3000)
+  })
+
+  it('keeps polling when thumbnail_status is processing even though ocr_status is terminal', async () => {
+    /**Mirrors the pending case for the processing state */
+    const qc = makeQueryClient()
+    mockGetById.mockResolvedValue(makeDocument('skipped', 'processing'))
+
+    renderHook(() => useDocument('doc-test-id'), { wrapper: makeWrapper(qc) })
+    await waitFor(() => expect(mockGetById).toHaveBeenCalled())
+
+    const refetchInterval = getRefetchIntervalFn(qc, 'doc-test-id')
+    const doc = makeDocument('skipped', 'processing')
+    expect(refetchInterval({ state: { data: doc, dataUpdateCount: 1 } })).toBe(3000)
+  })
+
+  it('stops polling when thumbnail_status is failed and ocr_status is terminal', async () => {
+    /**A failed thumbnail is a terminal state — no automatic retry from the client */
+    const qc = makeQueryClient()
+    mockGetById.mockResolvedValue(makeDocument('completed', 'failed'))
+
+    renderHook(() => useDocument('doc-test-id'), { wrapper: makeWrapper(qc) })
+    await waitFor(() => expect(mockGetById).toHaveBeenCalled())
+
+    const refetchInterval = getRefetchIntervalFn(qc, 'doc-test-id')
+    const doc = makeDocument('completed', 'failed')
+    expect(refetchInterval({ state: { data: doc, dataUpdateCount: 1 } })).toBe(false)
+  })
+
+  it('keeps polling when both ocr_status and thumbnail_status are still active', async () => {
+    /**Both jobs racing concurrently must keep the interval alive until the last one finishes */
+    const qc = makeQueryClient()
+    mockGetById.mockResolvedValue(makeDocument('processing', 'processing'))
+
+    renderHook(() => useDocument('doc-test-id'), { wrapper: makeWrapper(qc) })
+    await waitFor(() => expect(mockGetById).toHaveBeenCalled())
+
+    const refetchInterval = getRefetchIntervalFn(qc, 'doc-test-id')
+    const doc = makeDocument('processing', 'processing')
+    expect(refetchInterval({ state: { data: doc, dataUpdateCount: 1 } })).toBe(3000)
+  })
+})
+
+describe('useDocument — refetchInterval polling cap (40 updates)', () => {
+  it('keeps polling at exactly 40 updates while a status is still active', async () => {
+    /**The cap check is `updateCount > 40`, so 40 itself must still poll */
+    const qc = makeQueryClient()
+    mockGetById.mockResolvedValue(makeDocument('processing', 'ready'))
+
+    renderHook(() => useDocument('doc-test-id'), { wrapper: makeWrapper(qc) })
+    await waitFor(() => expect(mockGetById).toHaveBeenCalled())
+
+    const refetchInterval = getRefetchIntervalFn(qc, 'doc-test-id')
+    const doc = makeDocument('processing', 'ready')
+    expect(refetchInterval({ state: { data: doc, dataUpdateCount: 40 } })).toBe(3000)
+  })
+
+  it('stops polling once dataUpdateCount exceeds 40 even if a status is still active', async () => {
+    /**Should give up polling after ~2 minutes (40 × 3s) to avoid hammering the
+     * backend forever if a Celery worker is stuck */
+    const qc = makeQueryClient()
+    mockGetById.mockResolvedValue(makeDocument('processing', 'pending'))
+
+    renderHook(() => useDocument('doc-test-id'), { wrapper: makeWrapper(qc) })
+    await waitFor(() => expect(mockGetById).toHaveBeenCalled())
+
+    const refetchInterval = getRefetchIntervalFn(qc, 'doc-test-id')
+    const doc = makeDocument('processing', 'pending')
+    expect(refetchInterval({ state: { data: doc, dataUpdateCount: 41 } })).toBe(false)
+  })
+
+  it('does not apply the cap once both statuses are already terminal', async () => {
+    /**The cap only matters while actively polling — a terminal doc must return
+     * false regardless of how many updates have accumulated */
+    const qc = makeQueryClient()
+    mockGetById.mockResolvedValue(makeDocument('completed', 'ready'))
+
+    renderHook(() => useDocument('doc-test-id'), { wrapper: makeWrapper(qc) })
+    await waitFor(() => expect(mockGetById).toHaveBeenCalled())
+
+    const refetchInterval = getRefetchIntervalFn(qc, 'doc-test-id')
+    const doc = makeDocument('completed', 'ready')
+    expect(refetchInterval({ state: { data: doc, dataUpdateCount: 100 } })).toBe(false)
   })
 })
 
@@ -263,5 +337,57 @@ describe('useDocument — enabled flag', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
 
     expect(mockGetById).toHaveBeenCalledWith('some-document-id')
+  })
+})
+
+// ─── useRegenerateThumbnail ───────────────────────────────────────────────────
+
+describe('useRegenerateThumbnail', () => {
+  it('calls documentsApi.regenerateThumbnail with the given document id', async () => {
+    /**Should trigger the backend regeneration endpoint for the correct document */
+    const qc = makeQueryClient()
+    mockRegenerateThumbnail.mockResolvedValue(undefined)
+
+    const { result } = renderHook(() => useRegenerateThumbnail(), {
+      wrapper: makeWrapper(qc),
+    })
+
+    result.current.mutate('doc-test-id')
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockRegenerateThumbnail).toHaveBeenCalledWith('doc-test-id')
+  })
+
+  it('invalidates the document detail query on success', async () => {
+    /**Should refetch the document so the UI picks up thumbnail_status=processing
+     * after the regenerate call succeeds */
+    const qc = makeQueryClient()
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
+    mockRegenerateThumbnail.mockResolvedValue(undefined)
+
+    const { result } = renderHook(() => useRegenerateThumbnail(), {
+      wrapper: makeWrapper(qc),
+    })
+
+    result.current.mutate('doc-test-id')
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: documentKeys.detail('doc-test-id') })
+  })
+
+  it('does not invalidate any query when the mutation fails', async () => {
+    /**Should leave the cache untouched on failure — no false "ready" flash */
+    const qc = makeQueryClient()
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
+    mockRegenerateThumbnail.mockRejectedValue(new Error('network error'))
+
+    const { result } = renderHook(() => useRegenerateThumbnail(), {
+      wrapper: makeWrapper(qc),
+    })
+
+    result.current.mutate('doc-test-id')
+
+    await waitFor(() => expect(result.current.isError).toBe(true))
+    expect(invalidateSpy).not.toHaveBeenCalled()
   })
 })
