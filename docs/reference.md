@@ -1180,6 +1180,8 @@ ApiError (class)     extends Error { code, details, status }
 | `version` | `number` | |
 | `ocr_status` | `OcrStatus` | |
 | `ocr_content` | `string` | |
+| `thumbnail_status` | `ThumbnailStatus` | Fase 6.2 |
+| `thumbnail_url` | `string \| null` | Fase 6.2. Presigned URL, solo no-null si `thumbnail_status === 'ready'` |
 | `tags` | `string[]` | |
 | `metadata` | `Record<string, unknown>` | `metadata.ai_analysis` contiene resultado IA |
 | `folder` | `string \| null` | UUID de carpeta |
@@ -1192,8 +1194,10 @@ ApiError (class)     extends Error { code, details, status }
 
 ### `SearchResult`
 ```typescript
-Omit<Document, 'checksum' | 'metadata' | 'ocr_content'> & { rank: number }
+Omit<Document, 'checksum' | 'metadata' | 'ocr_content' | 'thumbnail_status' | 'thumbnail_url'> & { rank: number }
 ```
+`SearchResultSerializer` (backend) no expone campos de thumbnail — decisión de alcance de Fase 6.2:
+`SearchPage` muestra siempre el fallback genérico de `DocumentThumbnail`, nunca la miniatura real.
 
 ---
 
@@ -1309,6 +1313,7 @@ Omit<Document, 'checksum' | 'metadata' | 'ocr_content'> & { rank: number }
 
 ```typescript
 OcrStatus       = 'pending' | 'processing' | 'completed' | 'failed' | 'skipped'
+ThumbnailStatus = 'pending' | 'processing' | 'ready' | 'failed' | 'skipped'  // Fase 6.2; estado exitoso es 'ready', no 'completed'
 DocumentStatus  = 'draft' | 'under_review' | 'approved' | 'rejected' | 'archived'
 UserRole        = 'super_admin' | 'org_admin' | 'supervisor' | 'editor' | 'viewer' | 'auditor'
 WorkflowStatus  = 'pending' | 'in_progress' | 'completed' | 'rejected' | 'cancelled'
@@ -1501,7 +1506,7 @@ folderKeys.tree               = ['folders', 'tree']
 | Hook | Parámetros | Retorno |
 |---|---|---|
 | `useDocuments` | `params: ListDocumentsParams` | `UseQueryResult<{items, meta}>` |
-| `useDocument` | `id: string, pollForAi=false` | `UseQueryResult<Document>` — polling 3s mientras OCR activo (cap ~2min) o AI en curso |
+| `useDocument` | `id: string, pollForAi=false` | `UseQueryResult<Document>` — polling 3s mientras OCR **o thumbnail** (Fase 6.2) activo (cap ~2min) o AI en curso |
 | `useDocumentVersions` | `id, page=1` | `UseQueryResult<{items, meta}>` |
 | `useFolderTree` | — | `UseQueryResult<Folder[]>` |
 | `useUploadDocument` | — | `{ mutation: UseMutationResult, uploadProgress: number }` |
@@ -1510,6 +1515,7 @@ folderKeys.tree               = ['folders', 'tree']
 | `useDownloadDocument` | — | `UseMutationResult` — abre URL en `_blank` on success |
 | `useUploadVersion` | `documentId: string` | `{ mutation, uploadProgress }` |
 | `useReprocessOcr` | — | `UseMutationResult<void, ApiError, string>` |
+| `useRegenerateThumbnail` | — | `UseMutationResult<void, ApiError, string>` — Fase 6.2, mismo patrón que `useReprocessOcr` |
 | `useRequestAiAnalysis` | — | `UseMutationResult` — `meta.suppressGlobalToast: true` |
 
 ---
@@ -1595,6 +1601,20 @@ workflowKeys.executionLogs(id, pg)   = ['workflows', 'executions', id, 'logs', p
 **Path:** `frontend/src/features/documents/components/OcrStatusBadge.tsx`
 **Props:** `{ status: OcrStatus }`
 **Descripción:** Badge visual para el estado OCR de un documento con colores diferenciados. Animación pulse para `processing`.
+
+---
+
+### `ThumbnailStatusBadge` (Fase 6.2)
+**Path:** `frontend/src/features/documents/components/ThumbnailStatusBadge.tsx`
+**Props:** `{ status: ThumbnailStatus }`
+**Descripción:** Clon estructural de `OcrStatusBadge` para los 5 estados de `ThumbnailStatus`. El estado terminal exitoso es `ready` (no `completed`), divergencia intencional respecto a `OcrStatus`.
+
+---
+
+### `DocumentThumbnail` (Fase 6.2)
+**Path:** `frontend/src/features/documents/components/DocumentThumbnail.tsx`
+**Props:** `{ status: ThumbnailStatus | undefined; url: string | null | undefined; mimeType: string; className?: string; fit?: 'cover' | 'contain' }`
+**Descripción:** Tile reutilizable. Renderiza `<img loading="lazy">` si `status === 'ready'` y hay `url` (y la carga no falló vía `onError`); spinner (`Loader2` animado) si `status === 'processing'`; ícono genérico de fallback en cualquier otro caso, incluido `status=undefined` (cubre el cast `SearchResult as unknown as Document` en `SearchPage`, que nunca trae datos de thumbnail reales). Usado con `fit="cover"` en `DocumentCard` y `fit="contain"` en la card "Vista previa" de `DocumentDetailPage`.
 
 ---
 
@@ -1709,6 +1729,7 @@ backend — invisible y no manipulable desde JS. Cierra el trade-off XSS documen
 | `useDocumentVersions` | `GET /documents/{id}/versions/` | — | `DocumentVersion[]` |
 | `useUploadVersion` | `POST /documents/{id}/versions/` | `FormData (UploadVersionData)` | `DocumentVersion` |
 | `useReprocessOcr` | `POST /documents/{id}/reprocess-ocr/` | — | `Document` (202) |
+| `useRegenerateThumbnail` | `POST /documents/{id}/regenerate-thumbnail/` | — | `Document` (202) — Fase 6.2 |
 | `useRequestAiAnalysis` | `POST /documents/{id}/analyze/` | — | `Document` (202) |
 | `useStartWorkflowFromDocument` | `POST /documents/{id}/start-workflow/` | `{template_id: string}` | `WorkflowExecution` |
 | `useWorkflowTemplates` | `GET /workflows/templates/` | `ListTemplatesParams` | `WorkflowTemplate[]` paginado |

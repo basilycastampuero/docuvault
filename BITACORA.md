@@ -11,11 +11,71 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Fase 6.2 (enriquecimiento documental), backend implementado y testeado
-> completo** (2026-07-06). Rama `feature/5.2-frontend-documents`, pendiente de commit.
+> Última actualización: **Fase 6.2 (enriquecimiento documental) COMPLETA — backend y frontend**
+> (2026-07-06). Rama `feature/5.2-frontend-documents`, frontend pendiente de commit.
 > Proyecto de portafolio completado (Fases 0–5). Fase 6 = mejoras post-portafolio, en ejecución
-> (6.1 completa, 6.2 backend completo / frontend pendiente, 6.3 siguiente tras cerrar el frontend
-> de 6.2).
+> (6.1 completa, 6.2 completa, 6.3 siguiente).
+
+---
+
+### 2026-07-06 — Fase 6.2 frontend: miniaturas de documentos (pendiente de commit)
+
+Misma fecha que la sesión de backend (ver entrada siguiente, cronológicamente anterior dentro del
+mismo día), se cerró el frontend de **6.2 — Enriquecimiento documental**, completando la sub-fase
+en ambas capas. Flujo de agentes: **software-architect** (diseño de los componentes y del alcance
+frente al backend ya cerrado) → **senior-software-engineer** (implementación) →
+**test-quality-engineer** (tests) → **docs-manager** (esta entrada y el resto de la
+sincronización documental) → **git-operator** (commit, pendiente al cierre de esta sesión).
+
+**Qué se construyó.** Los tipos TS en `shared/types/index.ts` se extendieron con
+`ThumbnailStatus` (`pending|processing|ready|failed|skipped`) y los campos `thumbnail_status`/
+`thumbnail_url` en `Document`, reflejando uno a uno lo que ya exponía `DocumentSerializer` desde la
+sesión de backend. `ThumbnailStatusBadge` es un clon estructural de `OcrStatusBadge` — mismo
+patrón de badge por colores, misma forma de componente — pero con un detalle no evidente: el
+estado terminal exitoso de `ThumbnailStatus` es `ready`, no `completed` como en `OcrStatus`. Es una
+divergencia intencional heredada del backend (para no sugerir un significado idéntico entre ambos
+pipelines) que el frontend debía respetar sin "corregir" a `completed` por costumbre.
+
+`DocumentThumbnail` es el componente nuevo central: un tile reutilizable que decide qué mostrar
+según `status` y `url` — imagen con `loading="lazy"` si `ready` y hay URL (con manejo de
+`onError` por si la URL presignada expiró o el objeto no existe), spinner si `processing`, e ícono
+genérico de fallback en cualquier otro caso. Ese "cualquier otro caso" incluye deliberadamente
+`status === undefined`, porque `DocumentCard` se reutiliza en `SearchPage` mediante el cast
+`SearchResult as unknown as Document`, y `SearchResult` no tiene esos campos.
+
+**La decisión de alcance más importante de esta sesión: la búsqueda no muestra miniatura real.**
+`SearchResultSerializer` (backend) nunca expuso `thumbnail_status`/`thumbnail_url` — mismo patrón
+que ya excluía `checksum`/`metadata`/`ocr_content` para los resultados de búsqueda. En vez de
+extender ese serializer (fuera de alcance de una tarea de frontend, y no pedido), se decidió que
+`SearchResult` (TS) excluya explícitamente esos dos campos con `Omit<...>`, y que `SearchPage`
+caiga siempre al ícono de fallback genérico de `DocumentThumbnail`. Documentado como decisión de
+alcance explícita, no como una limitación descubierta a mitad de camino.
+
+`useRegenerateThumbnail` sigue el mismo patrón que `useReprocessOcr` (mutación simple, invalida la
+query del documento). El polling de `useDocument` — que ya seguía `ocr_status` con un cap de 40
+intentos (~2 min) desde la auditoría de Fase 5 — se extendió para seguir también
+`thumbnail_status` mientras esté `pending`/`processing`, reutilizando el mismo cap en vez de sumar
+un contador independiente.
+
+`DocumentCard` reemplazó su ícono fijo de tipo de archivo por `DocumentThumbnail` (`fit="cover"`).
+`DocumentDetailPage` ganó una card nueva "Vista previa" con `DocumentThumbnail` (`fit="contain"`),
+el `ThumbnailStatusBadge` y un botón "Regenerar miniatura" visible solo con rol de escritura y
+cuando el estado es `ready` o `failed` (no tiene sentido regenerar algo que ya está en curso).
+
+**Un detalle de tipos, no un bug de producción.** Al añadir los campos nuevos y obligatorios al
+tipo `Document`, varios fixtures de test existentes (que construían objetos `Document` a mano sin
+esos campos) dejaron de tipar correctamente. `tsc --noEmit` los marcó; Vitest no, porque no
+type-checkea al ejecutar. Se corrigieron las fixtures agregando `thumbnail_status: 'pending'` (u
+otro valor según el caso) y `thumbnail_url: null`. Mismo patrón de error que el ERR-069 del backend
+(fixture incompleto tras agregar un campo nuevo a un contrato compartido), aunque en la punta
+opuesta del stack.
+
+**Resultado final:** 227 tests frontend (174 → 227, +53 nuevos): `ThumbnailStatusBadge.test.tsx`,
+`DocumentThumbnail.test.tsx`, `DocumentCard.test.tsx` (nuevo, no existía suite propia para ese
+componente hasta ahora), y extensiones a `hooks.test.ts` y `DocumentDetailPage.test.tsx`. Backend
+sin cambios (632 tests, 98.69% cobertura, de la sesión anterior). 0 errores de TypeScript. Detalle
+completo en `docs/phase-plan.md` §6.2 (entregable ahora marcado COMPLETO backend+frontend);
+decisión #42 de `CLAUDE.md` §17 ampliada con la nota de alcance de `SearchPage`.
 
 ---
 

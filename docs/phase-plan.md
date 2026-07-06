@@ -2642,8 +2642,8 @@ permissions, audit, documents, workflows, search, notifications (billing dormido
 **Métricas tras 6.1 (2026-07-03):** 550 tests backend (95.62% cobertura) + 174 tests frontend, 0
 errores TypeScript.
 
-**Métricas tras 6.2 backend (2026-07-06):** 632 tests backend (98.69% cobertura) + 174 tests
-frontend (sin cambios — 6.2 frontend aún pendiente).
+**Métricas tras 6.2 (2026-07-06):** 632 tests backend (98.69% cobertura) + 227 tests frontend
+(174 → 227, +53 nuevos). 0 errores TypeScript.
 
 **Invariantes que Fase 6 respeta sin excepción (CLAUDE.md §2–16):** NUNCA microservicios; separación
 models/services/selectors/api; toda entidad de dominio nueva hereda `BaseModel` + FK obligatoria a
@@ -2657,7 +2657,7 @@ contra PostgreSQL real con test explícito de aislamiento de tenant.
 | Sub-fase | Área | Cierra deuda | Skill de portafolio | Toca BE | Toca FE | Toca infra | Compl. |
 |----------|------|--------------|---------------------|:---:|:---:|:---:|:---:|
 | 6.1 ✅ 2026-07-03 | JWT en cookies httpOnly | #28→#41 | Seguridad de auth / XSS-CSRF | ✅ | ✅ | — | M |
-| 6.2 🔶 backend 2026-07-06 | Enriquecimiento documental (thumbnails + texto Office) | Diferidos #3, #4 | Pipeline async de media | ✅ | ⏳ | — | M |
+| 6.2 ✅ 2026-07-06 | Enriquecimiento documental (thumbnails + texto Office) | Diferidos #3, #4 | Pipeline async de media | ✅ | ✅ | — | M |
 | 6.3 | Notificaciones in-app en tiempo real | #34, diferido notif. | Realtime (SSE) + entrega exactly-once | ✅ | ✅ | — | L |
 | 6.4 | Observabilidad avanzada | Diferidos #5, #6 | SRE / métricas / monitoreo | ✅ | — | ✅ | M |
 | 6.5 | Madurez de frontend (paginación, i18n, dark mode, E2E) | #38, diferidos i18n/dark/E2E | Frontend profesional + E2E | — | ✅ | — | M |
@@ -2835,7 +2835,7 @@ buscables por su contenido.
 
 **Complejidad:** M. **Dependencias externas:** `Pillow`, `python-docx`, `openpyxl` (pip).
 
-#### Entregable 6.2 (backend) — ✅ COMPLETADO (2026-07-06, pendiente de commit)
+#### Entregable 6.2 — ✅ COMPLETADO (backend + frontend, 2026-07-06)
 - [x] Migración `0004_add_document_thumbnail_fields` — columnas `thumbnail_status` (choices
       `ThumbnailStatus`: pending/processing/ready/failed/skipped, default `pending`) y
       `thumbnail_key` (`CharField(500)`, blank/default `""`) en `Document`.
@@ -2869,13 +2869,35 @@ buscables por su contenido.
 - [x] 632 tests backend (98.69% cobertura), incluye aislamiento de tenant (`regenerate-thumbnail`
       y `thumbnail_url` de otra organización → 404/`None`), corrupción de blob, timeout
       transitorio de storage, idempotencia, `cleanup` no borra thumbnails vivos.
-- [ ] **Pendiente (frontend, fuera de esta sesión):** `DocumentCard`/`DocumentListPage` con
-      miniatura (fallback a `FileTypeBadge`), `ThumbnailStatusBadge` con polling, preview ampliado
-      en `DocumentDetailPage`, tipos TS (`thumbnail_status`, `thumbnail_url`) y hook
-      `useRegenerateThumbnail`.
+- [x] **Frontend (2026-07-06, misma fecha, sesión posterior):** tipos TS `ThumbnailStatus`
+      (`pending|processing|ready|failed|skipped`); `Document` gana `thumbnail_status`/
+      `thumbnail_url: string | null`; `SearchResult` los excluye explícitamente (el
+      `SearchResultSerializer` del backend no los devuelve — mismo patrón que ya excluía
+      `checksum`/`metadata`/`ocr_content`).
+- [x] `ThumbnailStatusBadge` (nuevo, clon estructural de `OcrStatusBadge`; 5 estados; estado
+      terminal exitoso es `ready`, no `completed` — divergencia intencional respecto a `OcrStatus`).
+- [x] `DocumentThumbnail` (nuevo, tile reutilizable): `<img loading="lazy">` si `ready` + URL,
+      spinner si `processing`, ícono genérico de fallback en cualquier otro caso (cubre también
+      `status=undefined`, usado por el cast `SearchResult as unknown as Document` en `SearchPage`,
+      y fallo de carga de imagen vía `onError`).
+- [x] `useRegenerateThumbnail` (mismo patrón que `useReprocessOcr`); `refetchInterval` de
+      `useDocument` extendido para seguir el polling mientras `thumbnail_status` esté activo
+      (mismo cap de 40 actualizaciones ya usado para OCR).
+- [x] `DocumentCard`: usa `DocumentThumbnail` (`fit="cover"`) en vez del ícono fijo anterior.
+- [x] `DocumentDetailPage`: card "Vista previa" con `DocumentThumbnail` (`fit="contain"`),
+      `ThumbnailStatusBadge`, botón "Regenerar miniatura" (solo con rol de escritura y estado
+      `ready`/`failed`).
+- [x] **Decisión de alcance:** `SearchPage` NO muestra miniatura real (cae a fallback genérico)
+      porque `SearchResultSerializer` no expone esos campos — fuera de alcance de 6.2, anotado
+      como mejora futura.
+- [x] 227 tests frontend (174 → 227, +53): `ThumbnailStatusBadge.test.tsx`,
+      `DocumentThumbnail.test.tsx`, `DocumentCard.test.tsx` (nuevo), extensiones a `hooks.test.ts`
+      y `DocumentDetailPage.test.tsx`. Fixtures existentes corregidas para incluir los campos
+      nuevos requeridos por el tipo `Document` (detectado por `tsc`, no por Vitest).
 
 Actualiza la decisión de diseño #12 (Office ya no es 100% `skipped`: OOXML se extrae) y añade la
-decisión **#42** en `CLAUDE.md` §17 (diseño de thumbnails). Ver entrada de BITÁCORA del 2026-07-06.
+decisión **#42** en `CLAUDE.md` §17 (diseño de thumbnails). Ver entradas de BITÁCORA del 2026-07-06
+(backend y frontend).
 
 ---
 
@@ -3091,11 +3113,9 @@ dependencias, cierra la deuda de seguridad de mayor severidad, sin migraciones).
 
 **6.1 completada el mismo día (2026-07-03).** Ver `#### Entregable 6.1` más arriba.
 
-**6.2 backend completado el 2026-07-06** (ver `#### Entregable 6.2` más arriba); el frontend de
-6.2 (miniaturas en `DocumentCard`/`DocumentListPage`, `ThumbnailStatusBadge`, preview ampliado)
-queda pendiente. Sub-fase recomendada para continuar: cerrar el frontend de **6.2** antes de pasar
-a **6.3** (notificaciones in-app en tiempo real), según el orden documentado en "Orden de
-implementación recomendado" más abajo.
+**6.2 completada el 2026-07-06** (backend y frontend, ver `#### Entregable 6.2` más arriba).
+Sub-fase recomendada para continuar: **6.3** (notificaciones in-app en tiempo real), según el
+orden documentado en "Orden de implementación recomendado" más abajo.
 
 ---
 

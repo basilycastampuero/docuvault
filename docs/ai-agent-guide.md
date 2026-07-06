@@ -885,7 +885,7 @@ npm run build     # ejecuta: vite build
 | Propiedades faltantes en object literals | warning | error |
 | Propiedades requeridas faltantes en tipos | warning | error |
 
-**Errores concretos de este proyecto (ERR-064 a ERR-067):**
+**Errores concretos de este proyecto (ERR-064 a ERR-067, ERR-070):**
 
 ```typescript
 // ERR-064 — as const + includes
@@ -897,9 +897,11 @@ const WRITE_ROLES = ['editor', 'supervisor', 'org_admin', 'super_admin'] as cons
 // ❌ <DocumentCard document={searchResult} /> donde SearchResult omite campos que Document requiere
 // ✅ <DocumentCard document={searchResult as unknown as Document} /> (si el componente no los usa)
 
-// ERR-066/ERR-067 — campos requeridos faltantes en fixtures de test
-// ❌ const MOCK = { id: '...', name: '...' }  // sin ocr_content
-// ✅ const MOCK = { id: '...', name: '...', ocr_content: '' }
+// ERR-066/ERR-067/ERR-070 — campos requeridos faltantes en fixtures de test
+// Cada vez que se agrega un campo obligatorio nuevo a un tipo de contrato compartido (Document),
+// TODOS los fixtures que lo construyen a mano deben actualizarse en el mismo cambio.
+// ❌ const MOCK = { id: '...', name: '...' }  // sin ocr_content / thumbnail_status / thumbnail_url
+// ✅ const MOCK = { id: '...', name: '...', ocr_content: '', thumbnail_status: 'pending', thumbnail_url: null }
 ```
 
 **Regla:** Siempre verificar con `npm run build` antes de abrir una PR. Si el paso `vite build` falla en CI pero `tsc --noEmit` pasa local, la causa es casi siempre una de las diferencias de strict mode de la tabla anterior.

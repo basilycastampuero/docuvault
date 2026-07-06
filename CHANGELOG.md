@@ -8,15 +8,15 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
-- Fase 6.2 (backend, `eb6c554`): generación de thumbnails (PDF/imagen) y extracción de texto de Office (docx/xlsx). Ver detalle abajo bajo `[6.2-backend]`. Pendiente: frontend (miniaturas, badge de estado, tipos TS).
+- Fase 6.2 frontend (commit pendiente): miniaturas de documentos en la UI (`DocumentCard`, `DocumentDetailPage`). Backend ya commiteado (`eb6c554`/`bc79601`). Ver detalle abajo bajo `[6.2]`, sección "Frontend".
 
 ---
 
-## [6.2-backend] — 2026-07-06
+## [6.2] — 2026-07-06
 
-Fase 6.2 (solo backend): pipeline async de enriquecimiento documental — miniaturas y extracción de texto de Office.
+Fase 6.2 completa (backend + frontend): pipeline async de enriquecimiento documental — miniaturas y extracción de texto de Office.
 
-### Added
+### Added — Backend
 - `eb6c554` Migración `0004_add_document_thumbnail_fields`: columnas `thumbnail_status` (enum `ThumbnailStatus`: pending/processing/ready/failed/skipped) y `thumbnail_key` en `Document`
 - `eb6c554` `thumbnail_service.generate()`: renderiza thumbnail PNG (PDF primera página vía `pdf2image`, imágenes vía `Pillow`), resize a `THUMBNAIL_MAX_SIZE` (400px por defecto), sube a storage y audita con `metadata={"via": "thumbnail"}`
 - `eb6c554` `ocr_service` extendido: extracción de texto real para Office OOXML (`.docx` vía `python-docx`, `.xlsx` vía `openpyxl`), escrito en `ocr_content` (dispara el signal FTS existente)
@@ -27,9 +27,19 @@ Fase 6.2 (solo backend): pipeline async de enriquecimiento documental — miniat
 - `eb6c554` Dependencias `python-docx==1.1.2`, `openpyxl==3.1.5`
 - `eb6c554` 82 tests nuevos (550 → 632 tests backend, 98.69% cobertura)
 
-### Changed
+### Changed — Backend
 - `eb6c554` `cleanup_service.delete_orphan_blobs` preserva `thumbnail_key` de documentos vivos, igual que `storage_path` y las versiones
 
+### Added — Frontend
+- `07fd019` Tipo `ThumbnailStatus` en `shared/types/index.ts` (`pending|processing|ready|failed|skipped`); `Document` gana `thumbnail_status`/`thumbnail_url: string | null`
+- `07fd019` `ThumbnailStatusBadge` (clon estructural de `OcrStatusBadge`; estado terminal exitoso es `ready`, no `completed`)
+- `07fd019` `DocumentThumbnail`: tile reutilizable — imagen lazy si `ready`+URL, spinner si `processing`, ícono de fallback en el resto de casos (incluye `status=undefined` y fallo de carga vía `onError`)
+- `07fd019` `useRegenerateThumbnail` (mismo patrón que `useReprocessOcr`); polling de `useDocument` extendido a `thumbnail_status` (mismo cap de 40 intentos que OCR)
+- `07fd019` `DocumentCard` usa `DocumentThumbnail` (`fit="cover"`); `DocumentDetailPage` gana card "Vista previa" con `DocumentThumbnail` (`fit="contain"`), badge y botón "Regenerar miniatura" (solo rol de escritura, estado `ready`/`failed`)
+- `2d1c701` 53 tests nuevos (174 → 227 tests frontend): `ThumbnailStatusBadge.test.tsx`, `DocumentThumbnail.test.tsx`, `DocumentCard.test.tsx`, extensiones a `hooks.test.ts` y `DocumentDetailPage.test.tsx`
+
+### Changed — Frontend
+- `SearchResult` (TS) excluye explícitamente `thumbnail_status`/`thumbnail_url` (mismo patrón que `checksum`/`metadata`/`ocr_content`), porque `SearchResultSerializer` no los devuelve. Decisión de alcance: `SearchPage` no muestra miniatura real, siempre cae al fallback genérico — fuera de alcance de 6.2
 
 ---
 

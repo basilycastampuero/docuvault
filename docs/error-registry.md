@@ -5,7 +5,7 @@
 > auditorías de cada fase.
 >
 > Uso principal: referencia histórica y fuente para `docs/ai-agent-guide.md`.
-> Última actualización: 2026-07-06. Errores registrados: ERR-001 a ERR-069.
+> Última actualización: 2026-07-06. Errores registrados: ERR-001 a ERR-070.
 
 ---
 
@@ -13,7 +13,7 @@
 
 | Categoría | Errores |
 |---|---|
-| `TYPE_CONTRACT` | ERR-005, ERR-019, ERR-020, ERR-022, ERR-023, ERR-025, ERR-037, ERR-038, ERR-039, ERR-040, ERR-041, ERR-044, ERR-046, ERR-047, ERR-048, ERR-049, ERR-050, ERR-062, ERR-064, ERR-065, ERR-066, ERR-067 |
+| `TYPE_CONTRACT` | ERR-005, ERR-019, ERR-020, ERR-022, ERR-023, ERR-025, ERR-037, ERR-038, ERR-039, ERR-040, ERR-041, ERR-044, ERR-046, ERR-047, ERR-048, ERR-049, ERR-050, ERR-062, ERR-064, ERR-065, ERR-066, ERR-067, ERR-070 |
 | `REACT_STATE` | ERR-015, ERR-016, ERR-021, ERR-026, ERR-045, ERR-059 |
 | `ASYNC_CELERY` | ERR-008, ERR-009, ERR-012, ERR-013, ERR-014, ERR-017, ERR-018, ERR-063 |
 | `ENVELOPE` | ERR-010, ERR-039, ERR-040, ERR-041, ERR-042 |
@@ -1388,3 +1388,21 @@
 **Causa raíz:** Un mock que cubre una sola de las dos tasks encoladas en `on_commit` queda incompleto en cuanto se añade una segunda; el patrón es el mismo de ERR-063 pero detectado y corregido durante la escritura de los tests nuevos de Fase 6.2, antes de que llegara a producir fallos intermitentes en CI.
 
 **Solución aplicada:** Extender el fixture `mock_storage` para mockear también `apps.documents.services.document_service.generate_thumbnail.delay` junto a `process_ocr.delay`. Pendiente de commit (sesión de Fase 6.2, 2026-07-06).
+
+---
+
+## ERR-070: Fixtures de tests de documentos sin `thumbnail_status`/`thumbnail_url` tras extender el tipo `Document`
+
+| Campo | Valor |
+|---|---|
+| Fecha | 2026-07-06 |
+| Fase | 6.2 (frontend) |
+| Severidad | BAJA (detectado por `tsc`, no una falla de CI ya ocurrida) |
+| Categoría | `TYPE_CONTRACT` |
+| Archivo(s) afectado(s) | Fixtures `MOCK_DOCUMENT`/equivalentes en `frontend/src/features/documents/__tests__/hooks.test.ts` y `DocumentDetailPage.test.tsx` |
+
+**Descripción:** Al añadir `thumbnail_status: ThumbnailStatus` y `thumbnail_url: string | null` como campos obligatorios del tipo `Document`, los fixtures de test existentes (construidos a mano antes de esta sesión) dejaron de tipar correctamente bajo `tsc --noEmit`. Vitest seguía en verde porque no type-checkea al ejecutar — el problema solo era visible corriendo el compilador.
+
+**Causa raíz:** Mismo patrón que ERR-066/ERR-067 (2026-07-01): cada vez que se agrega un campo obligatorio nuevo a un tipo de contrato compartido (`Document`), todos los fixtures de test que construyen ese tipo a mano deben actualizarse en el mismo cambio. No hay un mecanismo automático (p. ej. un factory/builder de fixtures) que lo garantice.
+
+**Solución aplicada:** Añadir `thumbnail_status`/`thumbnail_url` a los fixtures afectados durante la escritura de los tests nuevos de esta sesión, antes de que llegara a fallar en CI. Detectado proactivamente por `test-quality-engineer`, no como un fallo de pipeline ya ocurrido. Pendiente de commit (sesión de Fase 6.2 frontend, 2026-07-06). **Nota recurrente:** este es el tercer caso del mismo patrón (ERR-066, ERR-067, ERR-070) — señal de que valdría la pena introducir un factory de fixtures de `Document` en el frontend (deuda técnica anotada, no implementada).
