@@ -6,7 +6,7 @@ from rest_framework.test import APIClient
 
 from apps.authentication.models import UserRole
 from apps.authentication.tests.factories import UserFactory
-from apps.documents.models import DocumentStatus
+from apps.documents.models import DocumentStatus, ThumbnailStatus
 from apps.documents.storage.storage_service import StorageService as RealStorageService
 from apps.organizations.tests.factories import OrganizationFactory
 
@@ -50,10 +50,15 @@ def _storage_mock(monkeypatch) -> MagicMock:
     monkeypatch.setattr(
         "apps.documents.services.document_service.StorageService", mock_class
     )
-    # transaction=True tests fire on_commit; with CELERY_TASK_ALWAYS_EAGER the
-    # OCR task runs synchronously and tries to reach MinIO (unavailable in CI).
+    # transaction=True tests fire on_commit; with CELERY_TASK_ALWAYS_EAGER both the
+    # OCR and thumbnail tasks run synchronously and would otherwise try to reach
+    # MinIO for a blob that was never really uploaded (upload_file is mocked here).
     monkeypatch.setattr(
         "apps.documents.services.document_service.process_ocr.delay",
+        MagicMock(),
+    )
+    monkeypatch.setattr(
+        "apps.documents.services.document_service.generate_thumbnail.delay",
         MagicMock(),
     )
     return mock_instance
@@ -360,6 +365,172 @@ class TestReprocessOcr:
         response = _client_for(_editor(org_b)).post(
             f"/api/v1/documents/{doc_a.id}/reprocess-ocr/"
         )
+        assert response.status_code == 404
+
+
+@pytest.mark.django_db
+class TestRegenerateThumbnail:
+    def test_editor_can_regenerate_and_dispatches_task(
+        self, django_capture_on_commit_callbacks
+    ):
+        org = OrganizationFactory()
+        user = _editor(org)
+        doc = DocumentFactory(
+            organization=org,
+            created_by=user,
+            thumbnail_status=ThumbnailStatus.FAILED,
+        )
+        with patch(
+            "apps.documents.services.document_service.generate_thumbnail.delay"
+        ) as mock_delay:
+            with django_capture_on_commit_callbacks(execute=True):
+                response = _client_for(user).post(
+                    f"/api/v1/documents/{doc.id}/regenerate-thumbnail/"
+                )
+        assert response.status_code == 202
+        mock_delay.assert_called_once_with(str(doc.id))
+        assert response.json()["data"]["thumbnail_status"] == "pending"
+
+    def test_viewer_cannot_regenerate(self):
+        org = OrganizationFactory()
+        doc = DocumentFactory(organization=org)
+        response = _client_for(_viewer(org)).post(
+            f"/api/v1/documents/{doc.id}/regenerate-thumbnail/"
+        )
+        assert response.status_code == 403
+
+    def test_regenerate_other_org_returns_404(self):
+        org_a = OrganizationFactory()
+        org_b = OrganizationFactory()
+        doc_a = DocumentFactory(organization=org_a)
+        response = _client_for(_editor(org_b)).post(
+            f"/api/v1/documents/{doc_a.id}/regenerate-thumbnail/"
+        )
+        assert response.status_code == 404
+
+    def test_unauthenticated_returns_401(self):
+        org = OrganizationFactory()
+        doc = DocumentFactory(organization=org)
+        response = APIClient().post(f"/api/v1/documents/{doc.id}/regenerate-thumbnail/")
+        assert response.status_code == 401
+
+
+@pytest.mark.django_db
+class TestDocumentThumbnailSerialization:
+    def test_thumbnail_url_present_when_ready(self, monkeypatch):
+        org = OrganizationFactory()
+        user = _viewer(org)
+        doc = DocumentFactory(
+            organization=org,
+            created_by=user,
+            thumbnail_status=ThumbnailStatus.READY,
+            thumbnail_key="org/2026/01/doc/thumbnails/thumb.png",
+        )
+        mock_instance = MagicMock()
+        mock_instance.get_presigned_url.return_value = (
+            "https://minio.local/signed-thumb"
+        )
+        # DocumentDetailView does not pass a `storage` context, so the serializer
+        # falls back to instantiating its own StorageService() (see serializers.py
+        # docstring on get_thumbnail_url) — that is the class we must patch here.
+        monkeypatch.setattr(
+            "apps.documents.api.serializers.StorageService",
+            MagicMock(return_value=mock_instance),
+        )
+        response = _client_for(user).get(f"/api/v1/documents/{doc.id}/")
+        assert response.status_code == 200
+        assert (
+            response.json()["data"]["thumbnail_url"]
+            == "https://minio.local/signed-thumb"
+        )
+
+    @pytest.mark.parametrize(
+        "status_value",
+        [
+            ThumbnailStatus.PENDING,
+            ThumbnailStatus.PROCESSING,
+            ThumbnailStatus.SKIPPED,
+            ThumbnailStatus.FAILED,
+        ],
+    )
+    def test_thumbnail_url_is_none_when_not_ready(self, status_value):
+        org = OrganizationFactory()
+        user = _viewer(org)
+        doc = DocumentFactory(
+            organization=org,
+            created_by=user,
+            thumbnail_status=status_value,
+            thumbnail_key="org/2026/01/doc/thumbnails/thumb.png",
+        )
+        response = _client_for(user).get(f"/api/v1/documents/{doc.id}/")
+        assert response.json()["data"]["thumbnail_url"] is None
+
+    def test_thumbnail_key_never_exposed_in_response(self, monkeypatch):
+        """Security requirement: the raw `thumbnail_key` field must never leak.
+
+        Uses a mocked presigned URL: a *real* one would legitimately embed the
+        object key as part of its query string (that is how presigned URLs work),
+        which would make a raw substring check meaningless. What must never appear
+        is the `thumbnail_key` field itself in the serialized payload.
+        """
+        org = OrganizationFactory()
+        user = _viewer(org)
+        doc = DocumentFactory(
+            organization=org,
+            created_by=user,
+            thumbnail_status=ThumbnailStatus.READY,
+            thumbnail_key="org/2026/01/doc/thumbnails/thumb.png",
+        )
+        mock_instance = MagicMock()
+        mock_instance.get_presigned_url.return_value = (
+            "https://minio.local/signed-thumb"
+        )
+        monkeypatch.setattr(
+            "apps.documents.api.serializers.StorageService",
+            MagicMock(return_value=mock_instance),
+        )
+        response = _client_for(user).get(f"/api/v1/documents/{doc.id}/")
+        assert "thumbnail_key" not in response.json()["data"]
+
+    def test_thumbnail_key_raw_path_never_leaks_when_not_ready(self):
+        """When not ready, thumbnail_url is None — the raw internal path must be
+        entirely absent from the response body (no presigned URL to legitimately
+        carry it)."""
+        org = OrganizationFactory()
+        user = _viewer(org)
+        doc = DocumentFactory(
+            organization=org,
+            created_by=user,
+            thumbnail_status=ThumbnailStatus.PENDING,
+            thumbnail_key="org/2026/01/doc/thumbnails/thumb.png",
+        )
+        response = _client_for(user).get(f"/api/v1/documents/{doc.id}/")
+        assert "org/2026/01/doc/thumbnails/thumb.png" not in response.content.decode()
+
+    def test_thumbnail_key_never_exposed_in_list_response(self):
+        """Same guarantee for the list endpoint (many=True serialization)."""
+        org = OrganizationFactory()
+        user = _viewer(org)
+        DocumentFactory(
+            organization=org,
+            created_by=user,
+            thumbnail_status=ThumbnailStatus.READY,
+            thumbnail_key="org/2026/01/doc/thumbnails/thumb.png",
+        )
+        response = _client_for(user).get("/api/v1/documents/")
+        for item in response.json()["data"]:
+            assert "thumbnail_key" not in item
+
+    def test_thumbnail_url_of_other_org_document_is_not_reachable(self):
+        """Tenant isolation: org A cannot fetch org B's document (and thus its thumbnail_url)."""
+        org_a = OrganizationFactory()
+        org_b = OrganizationFactory()
+        doc_b = DocumentFactory(
+            organization=org_b,
+            thumbnail_status=ThumbnailStatus.READY,
+            thumbnail_key="org-b/thumb.png",
+        )
+        response = _client_for(_viewer(org_a)).get(f"/api/v1/documents/{doc_b.id}/")
         assert response.status_code == 404
 
 

@@ -6,10 +6,16 @@ import pytest
 from apps.audit.models import AuditAction, AuditLog
 from apps.authentication.tests.factories import UserFactory
 from apps.core.exceptions import ConflictError, PermissionDenied
-from apps.documents.models import Document, DocumentStatus, DocumentVersion
+from apps.documents.models import (
+    Document,
+    DocumentStatus,
+    DocumentVersion,
+    ThumbnailStatus,
+)
 from apps.documents.services.document_service import (
     change_document_status,
     create_document,
+    regenerate_thumbnail,
     soft_delete_document,
     update_document_metadata,
     upload_new_version,
@@ -41,10 +47,16 @@ def mock_storage(monkeypatch):
         "apps.documents.services.document_service.StorageService",
         mock_class,
     )
-    # transaction=True tests fire on_commit; with CELERY_TASK_ALWAYS_EAGER the
-    # OCR task runs synchronously and tries to reach MinIO (unavailable in CI).
+    # transaction=True tests fire on_commit; with CELERY_TASK_ALWAYS_EAGER both the
+    # OCR and thumbnail tasks run synchronously and would otherwise try to reach
+    # MinIO for a blob that was never really uploaded (mock_storage.upload_file is
+    # mocked here, not a real put_object).
     monkeypatch.setattr(
         "apps.documents.services.document_service.process_ocr.delay",
+        MagicMock(),
+    )
+    monkeypatch.setattr(
+        "apps.documents.services.document_service.generate_thumbnail.delay",
         MagicMock(),
     )
     return mock_instance
@@ -118,6 +130,38 @@ class TestCreateDocument:
                 organization=org, user=user, file=_pdf_file(), name="b.pdf"
             )
             mock_delay.assert_called_once_with(str(doc.id))
+
+    def test_on_commit_dispatches_thumbnail(self, mock_storage):
+        org = OrganizationFactory()
+        user = UserFactory(organization=org)
+        with patch(
+            "apps.documents.services.document_service.generate_thumbnail.delay"
+        ) as mock_delay:
+            doc = create_document(
+                organization=org, user=user, file=_pdf_file(), name="thumb.pdf"
+            )
+            mock_delay.assert_called_once_with(str(doc.id))
+
+    def test_on_commit_dispatches_both_ocr_and_thumbnail(
+        self, mock_storage, django_capture_on_commit_callbacks
+    ):
+        """A single create_document call must enqueue BOTH async pipelines."""
+        org = OrganizationFactory()
+        user = UserFactory(organization=org)
+        with (
+            patch(
+                "apps.documents.services.document_service.process_ocr.delay"
+            ) as mock_ocr_delay,
+            patch(
+                "apps.documents.services.document_service.generate_thumbnail.delay"
+            ) as mock_thumb_delay,
+            django_capture_on_commit_callbacks(execute=True),
+        ):
+            doc = create_document(
+                organization=org, user=user, file=_pdf_file(), name="both.pdf"
+            )
+        mock_ocr_delay.assert_called_once_with(str(doc.id))
+        mock_thumb_delay.assert_called_once_with(str(doc.id))
 
     def test_storage_upload_failure_rolls_back_document(self, mock_storage):
         """If storage.upload_file raises mid-transaction, no Document persists."""
@@ -281,3 +325,41 @@ class TestSoftDeleteDocument:
         ).first()
         assert log is not None
         assert log.old_values["name"] == "todelete.pdf"
+
+
+@pytest.mark.django_db
+class TestRegenerateThumbnail:
+    def test_resets_status_to_pending(self):
+        org = OrganizationFactory()
+        user = UserFactory(organization=org)
+        doc = DocumentFactory(
+            organization=org,
+            created_by=user,
+            thumbnail_status=ThumbnailStatus.FAILED,
+        )
+        updated = regenerate_thumbnail(organization=org, user=user, document=doc)
+        assert updated.thumbnail_status == ThumbnailStatus.PENDING
+
+    def test_dispatches_generate_thumbnail_on_commit(
+        self, django_capture_on_commit_callbacks
+    ):
+        org = OrganizationFactory()
+        user = UserFactory(organization=org)
+        doc = DocumentFactory(organization=org, created_by=user)
+        with patch(
+            "apps.documents.services.document_service.generate_thumbnail.delay"
+        ) as mock_delay:
+            with django_capture_on_commit_callbacks(execute=True):
+                regenerate_thumbnail(organization=org, user=user, document=doc)
+        mock_delay.assert_called_once_with(str(doc.id))
+
+    def test_audit_logged_with_via_thumbnail_regenerate(self):
+        org = OrganizationFactory()
+        user = UserFactory(organization=org)
+        doc = DocumentFactory(organization=org, created_by=user)
+        regenerate_thumbnail(organization=org, user=user, document=doc)
+        log = AuditLog.objects.filter(
+            entity_type="document", entity_id=str(doc.id), action=AuditAction.UPDATE
+        ).latest("created_at")
+        assert log.metadata == {"via": "thumbnail_regenerate"}
+        assert log.user == user

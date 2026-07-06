@@ -206,3 +206,40 @@ class TestCleanupIntegration:
         result = cleanup_service.delete_orphan_blobs(grace_hours=0)
 
         assert result == {"scanned": 0, "deleted": 0, "skipped_grace": 0}
+
+    def test_live_document_thumbnail_is_kept(self, live_storage: StorageService):
+        """A live document's thumbnail blob must survive cleanup, same as its file."""
+        doc_key = "integration/cleanup/thumb_live_doc.pdf"
+        thumb_key = "integration/cleanup/thumb_live_doc/thumbnails/thumb.png"
+        live_storage.upload_file(io.BytesIO(b"doc content"), doc_key, "application/pdf")
+        live_storage.upload_file(io.BytesIO(b"thumb bytes"), thumb_key, "image/png")
+
+        DocumentFactory(storage_path=doc_key, thumbnail_key=thumb_key)
+
+        result = cleanup_service.delete_orphan_blobs(grace_hours=0)
+
+        assert result["deleted"] == 0
+        assert live_storage.download_file(doc_key) == b"doc content"
+        assert live_storage.download_file(thumb_key) == b"thumb bytes"
+
+    def test_soft_deleted_document_thumbnail_is_removed_after_grace(
+        self, live_storage: StorageService
+    ):
+        """A soft-deleted document's thumbnail blob must be swept, same as its file."""
+        doc_key = "integration/cleanup/thumb_dead_doc.pdf"
+        thumb_key = "integration/cleanup/thumb_dead_doc/thumbnails/thumb.png"
+        live_storage.upload_file(io.BytesIO(b"doc content"), doc_key, "application/pdf")
+        live_storage.upload_file(io.BytesIO(b"thumb bytes"), thumb_key, "image/png")
+
+        doc = DocumentFactory(storage_path=doc_key, thumbnail_key=thumb_key)
+        doc.soft_delete()
+
+        result = cleanup_service.delete_orphan_blobs(grace_hours=0)
+
+        assert result["deleted"] >= 2
+        from botocore.exceptions import ClientError
+
+        for key in (doc_key, thumb_key):
+            with pytest.raises(ClientError) as exc_info:
+                live_storage.download_file(key)
+            assert exc_info.value.response["Error"]["Code"] in ("NoSuchKey", "404")

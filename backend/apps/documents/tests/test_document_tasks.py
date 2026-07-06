@@ -8,6 +8,7 @@ from apps.core.exceptions import TransientError
 from apps.documents.tasks.document_tasks import (
     analyze_document,
     cleanup_orphan_blobs,
+    generate_thumbnail,
     process_ocr,
 )
 from apps.documents.tests.factories import DocumentFactory
@@ -115,6 +116,47 @@ class TestAnalyzeDocumentTask:
         doc.refresh_from_db()
         assert doc.metadata["custom_field"] == "preserved"
         assert doc.metadata["ai_analysis"]["status"] == "failed"
+
+
+@pytest.mark.django_db
+class TestGenerateThumbnailTask:
+    def test_happy_path_calls_service_with_document(self):
+        doc = DocumentFactory()
+        with patch(
+            "apps.documents.services.thumbnail_service.generate"
+        ) as mock_generate:
+            result = generate_thumbnail.apply(args=[str(doc.id)])
+        assert result.successful()
+        mock_generate.assert_called_once()
+        assert mock_generate.call_args.args[0].id == doc.id
+
+    def test_transient_error_triggers_retry(self):
+        doc = DocumentFactory()
+        with patch(
+            "apps.documents.services.thumbnail_service.generate",
+            side_effect=TransientError("storage timeout"),
+        ) as mock_generate:
+            with pytest.raises(Retry):
+                generate_thumbnail.apply(args=[str(doc.id)])
+        mock_generate.assert_called_once()
+
+    def test_permanent_error_propagates_without_retry(self):
+        doc = DocumentFactory()
+        with patch(
+            "apps.documents.services.thumbnail_service.generate",
+            side_effect=ValueError("corrupt file"),
+        ) as mock_generate:
+            with pytest.raises(ValueError):
+                generate_thumbnail.apply(args=[str(doc.id)])
+        mock_generate.assert_called_once()
+
+    def test_missing_document_skips_without_error(self):
+        with patch(
+            "apps.documents.services.thumbnail_service.generate"
+        ) as mock_generate:
+            result = generate_thumbnail.apply(args=[str(uuid.uuid4())])
+        assert result.successful()
+        mock_generate.assert_not_called()
 
 
 class TestCleanupOrphanBlobsTask:

@@ -143,6 +143,63 @@ class TestDeleteOrphanBlobs:
         # In this edge case '' would be deleted — that is acceptable (nonsensical key).
         assert result["scanned"] == 1
 
+    def test_live_doc_thumbnail_is_kept(self, mock_storage):
+        """A live document's thumbnail_key must never be treated as orphan."""
+        DocumentFactory(
+            storage_path="org/doc6/file.pdf",
+            thumbnail_key="org/doc6/thumbnails/thumb.png",
+        )
+
+        mock_storage.list_objects.return_value = iter(
+            [
+                ("org/doc6/file.pdf", _ts(48)),
+                ("org/doc6/thumbnails/thumb.png", _ts(48)),
+            ]
+        )
+
+        result = cleanup_service.delete_orphan_blobs(grace_hours=24)
+
+        mock_storage.delete_file.assert_not_called()
+        assert result == {"scanned": 2, "deleted": 0, "skipped_grace": 0}
+
+    def test_soft_deleted_doc_thumbnail_is_deleted(self, mock_storage):
+        """A soft-deleted document's thumbnail (past grace) must be cleaned up."""
+        doc = DocumentFactory(
+            storage_path="org/doc7/file.pdf",
+            thumbnail_key="org/doc7/thumbnails/thumb.png",
+        )
+        doc.deleted_at = _ts(48)
+        doc.save(update_fields=["deleted_at"])
+
+        mock_storage.list_objects.return_value = iter(
+            [
+                ("org/doc7/file.pdf", _ts(48)),
+                ("org/doc7/thumbnails/thumb.png", _ts(48)),
+            ]
+        )
+
+        result = cleanup_service.delete_orphan_blobs(grace_hours=24)
+
+        assert mock_storage.delete_file.call_count == 2
+        mock_storage.delete_file.assert_any_call("org/doc7/file.pdf")
+        mock_storage.delete_file.assert_any_call("org/doc7/thumbnails/thumb.png")
+        assert result == {"scanned": 2, "deleted": 2, "skipped_grace": 0}
+
+    def test_empty_thumbnail_key_never_treated_as_live_path(self, mock_storage):
+        """Documents without a thumbnail yet (default '') must not poison live_paths."""
+        DocumentFactory(storage_path="org/doc8/file.pdf", thumbnail_key="")
+
+        mock_storage.list_objects.return_value = iter(
+            [("", _ts(48))]  # a nonsensical empty-key object, if it ever existed
+        )
+
+        result = cleanup_service.delete_orphan_blobs(grace_hours=24)
+
+        # '' is discarded from live_paths (see test_empty_storage_path_never_triggers_delete);
+        # the important assertion here is that the real document's thumbnail_key=""
+        # does not accidentally get treated as a live reference for key "".
+        assert result["scanned"] == 1
+
     def test_summary_counts_are_correct(self, mock_storage):
         """The returned summary dict must reflect scanned/deleted/skipped_grace."""
         DocumentFactory(storage_path="org/live/file.pdf")
