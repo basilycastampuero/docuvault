@@ -7,6 +7,30 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- Fase 6.2 (backend, `eb6c554`): generación de thumbnails (PDF/imagen) y extracción de texto de Office (docx/xlsx). Ver detalle abajo bajo `[6.2-backend]`. Pendiente: frontend (miniaturas, badge de estado, tipos TS).
+
+---
+
+## [6.2-backend] — 2026-07-06
+
+Fase 6.2 (solo backend): pipeline async de enriquecimiento documental — miniaturas y extracción de texto de Office.
+
+### Added
+- `eb6c554` Migración `0004_add_document_thumbnail_fields`: columnas `thumbnail_status` (enum `ThumbnailStatus`: pending/processing/ready/failed/skipped) y `thumbnail_key` en `Document`
+- `eb6c554` `thumbnail_service.generate()`: renderiza thumbnail PNG (PDF primera página vía `pdf2image`, imágenes vía `Pillow`), resize a `THUMBNAIL_MAX_SIZE` (400px por defecto), sube a storage y audita con `metadata={"via": "thumbnail"}`
+- `eb6c554` `ocr_service` extendido: extracción de texto real para Office OOXML (`.docx` vía `python-docx`, `.xlsx` vía `openpyxl`), escrito en `ocr_content` (dispara el signal FTS existente)
+- `eb6c554` Task Celery `generate_thumbnail(document_id)` (autoretry, `max_retries=3`), encolada desde `document_service.create_document` vía `on_commit`
+- `eb6c554` `document_service.regenerate_thumbnail()` (mismo patrón que `reprocess_ocr`) y endpoint `POST /documents/{id}/regenerate-thumbnail/` (202, `editor+`)
+- `eb6c554` `DocumentSerializer.thumbnail_status` (read-only) y `thumbnail_url` (presigned URL, solo si `thumbnail_status == ready`)
+- `eb6c554` `StorageService.build_thumbnail_path()`; settings `THUMBNAIL_MAX_SIZE`/`THUMBNAIL_PDF_DPI`
+- `eb6c554` Dependencias `python-docx==1.1.2`, `openpyxl==3.1.5`
+- `eb6c554` 82 tests nuevos (550 → 632 tests backend, 98.69% cobertura)
+
+### Changed
+- `eb6c554` `cleanup_service.delete_orphan_blobs` preserva `thumbnail_key` de documentos vivos, igual que `storage_path` y las versiones
+
+
 ---
 
 ## [6.1] — 2026-07-03

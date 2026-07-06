@@ -11,10 +11,99 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Fase 6.1 (JWT en cookies httpOnly) implementada y testeada completa**
-> (2026-07-03). Rama `feature/5.2-frontend-documents`.
+> Última actualización: **Fase 6.2 (enriquecimiento documental), backend implementado y testeado
+> completo** (2026-07-06). Rama `feature/5.2-frontend-documents`, pendiente de commit.
 > Proyecto de portafolio completado (Fases 0–5). Fase 6 = mejoras post-portafolio, en ejecución
-> (6.1 completa, 6.2 siguiente).
+> (6.1 completa, 6.2 backend completo / frontend pendiente, 6.3 siguiente tras cerrar el frontend
+> de 6.2).
+
+---
+
+### 2026-07-06 — Fase 6.2 backend: thumbnails + extracción de texto Office (pendiente de commit)
+
+Se implementó el backend completo de **6.2 — Enriquecimiento documental**, la sub-fase elegida
+como continuación de 6.1 según el orden recomendado del backlog de Fase 6. Flujo de agentes usado
+en esta sesión: **software-architect** (diseño de las decisiones arquitectónicas D1–D12) →
+**senior-software-engineer** (implementación) → **test-quality-engineer** (tests) →
+**docs-manager** (esta entrada y el resto de la sincronización documental) → **git-operator**
+(commit, pendiente al cierre de esta sesión).
+
+**Qué resuelve.** Dos huecos distintos del pipeline async de documentos (Fase 4): (a) los
+documentos no tenían ninguna vista previa — ni en la lista ni en el detalle — más allá de un
+badge de tipo de archivo; (b) los documentos Office (`.docx`/`.xlsx`) quedaban con
+`ocr_status=skipped` desde Fase 4 (decisión #12), invisibles para la búsqueda de contenido pese a
+que Fase 3.3 (FTS) ya sabía indexar cualquier texto que llegara a `ocr_content`.
+
+**Thumbnails.** Nuevo `thumbnail_service.generate()`, mismo patrón que `ocr_service.process()`:
+columnas reales `thumbnail_status` (enum `ThumbnailStatus` — deliberadamente usa el valor
+`"ready"` en vez de `"completed"` como en `OcrStatus`, para no sugerir un significado idéntico) y
+`thumbnail_key` en `Document` (una sola migración, `0004_add_document_thumbnail_fields`). Genera
+PNG a partir de la primera página de un PDF (`pdf2image`, `first_page=1, last_page=1` — nunca
+rasteriza el documento completo) o de una imagen (`Pillow`), redimensionado al lado más largo
+configurado en `THUMBNAIL_MAX_SIZE` (400px por defecto). La distinción entre `skipped` y `failed`
+sigue el mismo criterio que ya existía para OCR: `storage_path` vacío o mime no soportado es
+ausencia de fuente (`skipped`), mientras que un blob corrupto o un renderizado que lanza excepción
+es un fallo real (`failed`, sin reintento); solo los errores de *descarga* del storage (timeout,
+red) se tratan como `TransientError` y se reintentan vía Celery. Se encola una nueva task
+`generate_thumbnail(document_id)` desde `document_service.create_document` (junto al
+`process_ocr.delay` ya existente, ambos vía `on_commit`), y una `regenerate_thumbnail()` nueva,
+calcada de `reprocess_ocr`, detrás del endpoint `POST /documents/{id}/regenerate-thumbnail/`.
+
+Una decisión de diseño no evidente: `thumbnail_url` se calcula inline en `DocumentSerializer`
+(`SerializerMethodField`, presigned URL solo si `thumbnail_status == ready`) en vez de vivir en un
+endpoint aparte como el de descarga del blob original. La razón es evitar N+1 de red en el
+cliente al renderizar una grilla de documentos — cada fila necesitaría una request adicional para
+resolver su miniatura. Para que eso no dispare, a su vez, una instancia nueva de `StorageService`
+(y por lo tanto un cliente boto3) por documento serializado, las vistas que serializan listas
+(`DocumentListCreateView`, `FolderDocumentsView`) pasan una única instancia compartida vía
+`context={"storage": StorageService()}`. `thumbnail_key` —la ruta cruda del objeto— nunca se
+expone en la API; solo la URL presignada, y solo cuando el thumbnail está listo.
+
+**Extracción de texto de Office.** Se extendió `ocr_service` (no se creó un service nuevo,
+siguiendo la recomendación arquitectónica de no fragmentar el pipeline) con handlers para
+`.docx` (`python-docx`, concatena el texto de cada párrafo) y `.xlsx` (`openpyxl` en modo
+`read_only=True, data_only=True`, concatena las celdas no vacías de cada hoja). El resultado se
+escribe en el mismo campo `ocr_content` con el mismo `save(update_fields=["ocr_content", ...])`
+que ya disparaba el signal de FTS desde Fase 3.3 — cero código nuevo de indexación. Solo Office
+**OOXML** real se extrae: los formatos legado `.doc`/`.xls` y los `.zip` genéricos siguen
+`skipped`, porque no son parseables por `python-docx`/`openpyxl`. Esto actualiza la decisión de
+diseño #12 (que decía "Office → skipped" sin distinguir OOXML de legado) y se refinó su redacción
+en `CLAUDE.md` §17.
+
+**Cleanup de blobs.** `cleanup_service.delete_orphan_blobs` (Fase 4.3) se extendió para tratar
+`Document.thumbnail_key` como una ruta viva más, igual que `storage_path` y las versiones — sin
+este cambio, el job diario de las 03:00 UTC habría borrado los thumbnails de documentos vivos en
+cuanto pasara el período de gracia de 24h. El path del thumbnail
+(`{org_id}/{yyyy}/{mm}/{doc_id}/thumbnails/thumb.png`) empieza deliberadamente por `org_id` para
+no romper el tratamiento tenant-agnóstico ya justificado de ese cleanup (decisión #21).
+
+**Un detalle de aislamiento de tests, no un bug de producción.** Al añadir el segundo
+`on_commit(generate_thumbnail.delay)` en `create_document`, el fixture `mock_storage` (que ya
+mockeaba `process_ocr.delay` desde una corrección de Fase 5.4/CI, ver ERR-063) quedó incompleto:
+sin mockear también `generate_thumbnail.delay`, algunos tests de `create_document` habrían
+disparado I/O real y no determinista contra MinIO. Se detectó y corrigió durante la escritura de
+los tests nuevos, no como una falla de CI ya ocurrida — registrado de todos modos como ERR-069
+(severidad BAJA) porque es un patrón que ya se había visto antes (ERR-063) y vale la pena que
+quede anotado para la próxima vez que se agregue una segunda task a un `on_commit` existente.
+
+**Resultado final:** 632 tests backend (98.69% cobertura, sube desde 550/95.62% de Fase 6.1),
+100% de cobertura en los archivos nuevos/modificados de esta sub-fase (`thumbnail_service.py`,
+cambios en `models/document.py` y `serializers.py`). Tests cubren: thumbnail de PDF e imagen,
+resize, mime no soportado (`skipped`), `storage_path` vacío (`skipped`), blob ausente y archivo
+corrupto (`failed` sin reintento), timeout de storage (`TransientError`), idempotencia, auditoría
+con `via=thumbnail`/`via=thumbnail_regenerate`, aislamiento de tenant en `regenerate-thumbnail` y
+en `thumbnail_url` (404/`None` para documento de otra organización), `thumbnail_key` nunca
+expuesta cruda (ni en detalle ni en listas), extracción docx/xlsx y su búsqueda por contenido,
+docx/xlsx corruptos (`failed`), y que `cleanup_orphan_blobs` preserva thumbnails vivos.
+
+**Lo que queda pendiente, explícitamente fuera de esta sesión.** El frontend de 6.2 no se tocó:
+faltan la miniatura en `DocumentCard`/`DocumentListPage` (con fallback a `FileTypeBadge` mientras
+no esté `ready`), un `ThumbnailStatusBadge` con polling (mismo patrón que `OcrStatusBadge`), el
+preview ampliado en `DocumentDetailPage`, y los tipos TS / hook `useRegenerateThumbnail`
+correspondientes. Tampoco se resolvió la deuda ya anotada en el plan (decisión D12 de la sesión de
+arquitectura): no se reencola thumbnail automáticamente al subir una nueva versión de un
+documento. Detalle completo del plan de ejecución y del entregable en `docs/phase-plan.md` §6.2;
+decisión de diseño registrada como **#42** en `CLAUDE.md` §17.
 
 ---
 

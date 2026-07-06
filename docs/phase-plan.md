@@ -2642,6 +2642,9 @@ permissions, audit, documents, workflows, search, notifications (billing dormido
 **Métricas tras 6.1 (2026-07-03):** 550 tests backend (95.62% cobertura) + 174 tests frontend, 0
 errores TypeScript.
 
+**Métricas tras 6.2 backend (2026-07-06):** 632 tests backend (98.69% cobertura) + 174 tests
+frontend (sin cambios — 6.2 frontend aún pendiente).
+
 **Invariantes que Fase 6 respeta sin excepción (CLAUDE.md §2–16):** NUNCA microservicios; separación
 models/services/selectors/api; toda entidad de dominio nueva hereda `BaseModel` + FK obligatoria a
 `Organization`; selectors reciben `organization` explícito; auditoría desde services; soft delete en
@@ -2654,7 +2657,7 @@ contra PostgreSQL real con test explícito de aislamiento de tenant.
 | Sub-fase | Área | Cierra deuda | Skill de portafolio | Toca BE | Toca FE | Toca infra | Compl. |
 |----------|------|--------------|---------------------|:---:|:---:|:---:|:---:|
 | 6.1 ✅ 2026-07-03 | JWT en cookies httpOnly | #28→#41 | Seguridad de auth / XSS-CSRF | ✅ | ✅ | — | M |
-| 6.2 | Enriquecimiento documental (thumbnails + texto Office) | Diferidos #3, #4 | Pipeline async de media | ✅ | ✅ | — | M |
+| 6.2 🔶 backend 2026-07-06 | Enriquecimiento documental (thumbnails + texto Office) | Diferidos #3, #4 | Pipeline async de media | ✅ | ⏳ | — | M |
 | 6.3 | Notificaciones in-app en tiempo real | #34, diferido notif. | Realtime (SSE) + entrega exactly-once | ✅ | ✅ | — | L |
 | 6.4 | Observabilidad avanzada | Diferidos #5, #6 | SRE / métricas / monitoreo | ✅ | — | ✅ | M |
 | 6.5 | Madurez de frontend (paginación, i18n, dark mode, E2E) | #38, diferidos i18n/dark/E2E | Frontend profesional + E2E | — | ✅ | — | M |
@@ -2831,6 +2834,48 @@ buscables por su contenido.
   failure → `failed`; aislamiento de tenant; `cleanup` no borra thumbnails vivos.
 
 **Complejidad:** M. **Dependencias externas:** `Pillow`, `python-docx`, `openpyxl` (pip).
+
+#### Entregable 6.2 (backend) — ✅ COMPLETADO (2026-07-06, pendiente de commit)
+- [x] Migración `0004_add_document_thumbnail_fields` — columnas `thumbnail_status` (choices
+      `ThumbnailStatus`: pending/processing/ready/failed/skipped, default `pending`) y
+      `thumbnail_key` (`CharField(500)`, blank/default `""`) en `Document`.
+- [x] `thumbnail_service.generate(document)` — PDF (primera página, `pdf2image` con
+      `first_page=1, last_page=1`) e imágenes (`Pillow`) → PNG, resize a `THUMBNAIL_MAX_SIZE`
+      (default 400px lado más largo); mime no soportado o `storage_path` vacío → `skipped`; blob
+      permanentemente ausente o archivo corrupto → `failed` (sin reintento); error transitorio de
+      storage → `TransientError` (reintenta vía Celery autoretry). Audita con `metadata={"via":
+      "thumbnail"}`.
+- [x] `ocr_service` extendido con extracción de texto real para OOXML (`.docx` vía `python-docx`,
+      `.xlsx` vía `openpyxl`), escrita en `ocr_content` (dispara el signal FTS existente). Office
+      legado (`.doc`/`.xls`) y `.zip` siguen `skipped` — no se pasan a los handlers OOXML.
+- [x] `document_service.create_document` encola también `generate_thumbnail.delay` vía
+      `on_commit` (junto a `process_ocr`); nueva `regenerate_thumbnail(organization, user,
+      document)`, mismo patrón que `reprocess_ocr`.
+- [x] `cleanup_service.delete_orphan_blobs` preserva `thumbnail_key` de documentos vivos (mismo
+      tratamiento que `storage_path` y las versiones).
+- [x] Task `generate_thumbnail(document_id)` en `tasks/document_tasks.py` — dispatcher fino
+      idéntico a `process_ocr` (`autoretry_for=(TransientError,)`, `max_retries=3`).
+- [x] Endpoint `POST /documents/{id}/regenerate-thumbnail/` (202, `editor+`).
+- [x] `DocumentSerializer` gana `thumbnail_status` (read-only) y `thumbnail_url`
+      (`SerializerMethodField`, presigned URL solo si `thumbnail_status == ready`, si no `None`).
+      `thumbnail_key` nunca se expone crudo en la API.
+- [x] `StorageService.build_thumbnail_path(org_id, document_id)` — formato
+      `{org_id}/{yyyy}/{mm}/{doc_id}/thumbnails/thumb.png` (empieza por `org_id` para no romper el
+      tratamiento tenant-agnóstico de `cleanup_orphan_blobs`, decisión #21).
+- [x] Settings `THUMBNAIL_MAX_SIZE` (default 400) y `THUMBNAIL_PDF_DPI` (default 100) en
+      `config/settings/base.py` y `backend/.env.example`.
+- [x] Dependencias nuevas: `python-docx==1.1.2`, `openpyxl==3.1.5` (+ transitivas `lxml`,
+      `et_xmlfile`) en `requirements.txt`. `Pillow`/`pdf2image` ya estaban de Fase 4.
+- [x] 632 tests backend (98.69% cobertura), incluye aislamiento de tenant (`regenerate-thumbnail`
+      y `thumbnail_url` de otra organización → 404/`None`), corrupción de blob, timeout
+      transitorio de storage, idempotencia, `cleanup` no borra thumbnails vivos.
+- [ ] **Pendiente (frontend, fuera de esta sesión):** `DocumentCard`/`DocumentListPage` con
+      miniatura (fallback a `FileTypeBadge`), `ThumbnailStatusBadge` con polling, preview ampliado
+      en `DocumentDetailPage`, tipos TS (`thumbnail_status`, `thumbnail_url`) y hook
+      `useRegenerateThumbnail`.
+
+Actualiza la decisión de diseño #12 (Office ya no es 100% `skipped`: OOXML se extrae) y añade la
+decisión **#42** en `CLAUDE.md` §17 (diseño de thumbnails). Ver entrada de BITÁCORA del 2026-07-06.
 
 ---
 
@@ -3044,9 +3089,13 @@ segundo entorno (staging VPS o mismo VPS con red separada).
 sub-fases siguen vigentes sin invalidaciones. Sub-fase recomendada para empezar: **6.1** (cero
 dependencias, cierra la deuda de seguridad de mayor severidad, sin migraciones).
 
-**6.1 completada el mismo día (2026-07-03).** Ver `#### Entregable 6.1` más arriba. Siguiente
-sub-fase recomendada: **6.2** (enriquecimiento documental — thumbnails + extracción de texto Office),
-según el orden documentado en "Orden de implementación recomendado" más abajo.
+**6.1 completada el mismo día (2026-07-03).** Ver `#### Entregable 6.1` más arriba.
+
+**6.2 backend completado el 2026-07-06** (ver `#### Entregable 6.2` más arriba); el frontend de
+6.2 (miniaturas en `DocumentCard`/`DocumentListPage`, `ThumbnailStatusBadge`, preview ampliado)
+queda pendiente. Sub-fase recomendada para continuar: cerrar el frontend de **6.2** antes de pasar
+a **6.3** (notificaciones in-app en tiempo real), según el orden documentado en "Orden de
+implementación recomendado" más abajo.
 
 ---
 

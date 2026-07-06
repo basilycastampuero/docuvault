@@ -5,7 +5,7 @@
 > auditorías de cada fase.
 >
 > Uso principal: referencia histórica y fuente para `docs/ai-agent-guide.md`.
-> Última actualización: 2026-07-03. Errores registrados: ERR-001 a ERR-068.
+> Última actualización: 2026-07-06. Errores registrados: ERR-001 a ERR-069.
 
 ---
 
@@ -1370,3 +1370,21 @@
 **Causa raíz:** El test no configuraba ningún mock de red (ni MSW ni mock de módulo) para la llamada a `refreshToken()` que dispara `ProtectedRoute` al montar. En jsdom, esa request sin handler fallaba con un error de red genérico — y ese error caía, por coincidencia, en el mismo bloque `.catch()` que maneja un 401 real del backend, produciendo el mismo resultado observable (`Navigate` a `/login`). El test aprobaba por un camino de fallo distinto al que pretendía cubrir, no por la lógica de negocio real.
 
 **Solución aplicada:** Detectado al reescribir la suite para el nuevo flujo de cookie httpOnly (que ya no puede decidir de antemano, mirando `localStorage`, si intentar el refresh). Se reemplazó la dependencia de comportamiento de red no configurado por mocks explícitos a nivel de módulo (`vi.mock('@/features/auth/api')` sobre `refreshToken`/`getMe`), permitiendo simular determinísticamente "cookie válida" vs. "cookie ausente/inválida" en cada caso. Commit `6701bc8`.
+
+---
+
+## ERR-069: `mock_storage` no cubría `generate_thumbnail.delay` — I/O real no determinista contra MinIO en tests de `create_document`
+
+| Campo | Valor |
+|---|---|
+| Fecha | 2026-07-06 |
+| Fase | 6.2 |
+| Severidad | BAJA (aislamiento de test, no bug de producción) |
+| Categoría | `ASYNC_CELERY` |
+| Archivo(s) afectado(s) | `backend/apps/documents/tests/test_document_service.py` (fixture `mock_storage`) |
+
+**Descripción:** Al añadir el segundo `transaction.on_commit(lambda: generate_thumbnail.delay(...))` en `document_service.create_document` (junto al `process_ocr.delay` ya existente), el fixture `mock_storage` —que ya mockeaba `process_ocr.delay` desde el fix de ERR-063— no mockeaba el nuevo `generate_thumbnail.delay`. Con `CELERY_TASK_ALWAYS_EAGER=True` y `django_capture_on_commit_callbacks`/`transaction=True`, la task de thumbnail se ejecutaba de verdad en algunos tests de `create_document`, intentando I/O real contra MinIO.
+
+**Causa raíz:** Un mock que cubre una sola de las dos tasks encoladas en `on_commit` queda incompleto en cuanto se añade una segunda; el patrón es el mismo de ERR-063 pero detectado y corregido durante la escritura de los tests nuevos de Fase 6.2, antes de que llegara a producir fallos intermitentes en CI.
+
+**Solución aplicada:** Extender el fixture `mock_storage` para mockear también `apps.documents.services.document_service.generate_thumbnail.delay` junto a `process_ocr.delay`. Pendiente de commit (sesión de Fase 6.2, 2026-07-06).

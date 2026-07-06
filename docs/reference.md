@@ -1,7 +1,7 @@
 # SasVault — Referencia Técnica Exhaustiva
 
 Diccionario de consulta rápida: qué existe, dónde, qué recibe y qué devuelve.
-Última actualización: 2026-07-01. (secciones 13 y 14 añadidas; §2 completo con `organization_service` y `user_service`)
+Última actualización: 2026-07-06. (Fase 6.2 backend: `thumbnail_service`, `ThumbnailStatus`, campos `thumbnail_status`/`thumbnail_url` en `Document`/`DocumentSerializer`, endpoint `regenerate-thumbnail`, task `generate_thumbnail`, extracción Office OOXML en `ocr_service`. Nota: solo backend — el frontend de 6.2 aún no toca `shared/types`, `documentsApi` ni hooks, por lo que esas secciones no se actualizaron en esta pasada.)
 
 ---
 
@@ -113,8 +113,10 @@ Constraint: `uq_folders_org_parent_name_alive` — único nombre por carpeta pad
 | `created_by` | `FK → User` | PROTECT |
 | `tags` | `ArrayField(CharField(50))` | default `[]`, GIN index |
 | `metadata` | `JSONField` | default `{}`, GIN index. Clave `"ai_analysis"` contiene resultado IA. |
-| `ocr_content` | `TextField` | blank — texto extraído por OCR |
+| `ocr_content` | `TextField` | blank — texto extraído por OCR o parseado de Office (OOXML) |
 | `ocr_status` | `CharField(20)` | choices `OcrStatus`, default `pending` |
+| `thumbnail_status` | `CharField(20)` | choices `ThumbnailStatus`, default `pending` (Fase 6.2) |
+| `thumbnail_key` | `CharField(500)` | blank/default `""` — clave del PNG derivado en MinIO/S3 (Fase 6.2); nunca se expone cruda en la API |
 | `search_vector` | `SearchVectorField` | nullable, GIN index |
 
 Constraint: `uq_documents_org_folder_name_alive` — único nombre por carpeta mientras no esté eliminado.
@@ -348,6 +350,11 @@ Todos los services reciben `organization` y `user` como primeros parámetros exp
 **Retorna:** `Document` (con `ocr_status=pending`)
 **Side effects:** resetea `ocr_status`, escribe `AuditLog`, encola `process_ocr.delay` via `on_commit`.
 
+#### `regenerate_thumbnail` (Fase 6.2)
+**Parámetros:** `organization, user, document`
+**Retorna:** `Document` (con `thumbnail_status=pending`)
+**Side effects:** resetea `thumbnail_status`, escribe `AuditLog` (`metadata={"via": "thumbnail_regenerate"}`), encola `generate_thumbnail.delay` via `on_commit`. Mismo patrón que `reprocess_ocr`.
+
 #### `request_ai_analysis`
 **Parámetros:** `organization, user, document`
 **Retorna:** `Document` (sin cambios — el resultado llega async en `metadata["ai_analysis"]`)
@@ -541,14 +548,34 @@ Roles que pueden actuar en cualquier paso independientemente del `required_role`
 | `process` | `document: Document` | `None` | Descarga blob de MinIO/S3; escribe `ocr_content` + `ocr_status` en DB; emite `AuditLog` con `metadata={"via":"ocr"}`; guardar `ocr_content` dispara signal FTS (Phase 3.3) | `TransientError` en fallo de storage recuperable (timeout, error de red) — la task Celery reintenta; blobs permanentemente ausentes (`NoSuchKey`, 404) no relanzean: marcan `ocr_status=FAILED` y retornan |
 
 **Flujo de `ocr_status`:**
-- `PROCESSING` → `COMPLETED` (PDF/imagen, extracción exitosa)
-- `PROCESSING` → `SKIPPED` (mime distinto de `application/pdf`, `image/jpeg`, `image/png`)
-- `PROCESSING` → `FAILED` (blob ausente de forma permanente o error de extracción irrecuperable)
+- `PROCESSING` → `COMPLETED` (PDF/imagen vía Tesseract, o Office OOXML vía extracción directa — Fase 6.2)
+- `PROCESSING` → `SKIPPED` (mime no soportado: ni `application/pdf`/`image/jpeg`/`image/png` ni OOXML `.docx`/`.xlsx` — incluye Office legado `.doc`/`.xls` y `.zip`)
+- `PROCESSING` → `FAILED` (blob ausente de forma permanente o error de extracción/parseo irrecuperable)
 
 **Notas:**
 - Idempotente: sobreescribe resultado anterior; seguro ante re-entrega de Celery.
-- Usa `settings.OCR_LANGUAGES` (Tesseract) y `settings.OCR_PDF_DPI` (pdf2image).
+- PDF/imagen: usa `settings.OCR_LANGUAGES` (Tesseract) y `settings.OCR_PDF_DPI` (pdf2image).
+- Office (Fase 6.2): `.docx` vía `python-docx` (concatena el texto de cada párrafo); `.xlsx` vía `openpyxl` (`read_only=True, data_only=True`, concatena celdas no vacías de cada hoja, separadas por tab/salto de línea). Solo OOXML — Office legado (`.doc`/`.xls`) y `.zip` no se pasan a estos handlers.
 - La actualización usa `save(update_fields=["ocr_content", "ocr_status", "updated_at"])` para no disparar señales innecesarias salvo la de FTS.
+
+---
+
+### `thumbnail_service` — `backend/apps/documents/services/thumbnail_service.py` (Fase 6.2)
+
+| Función | Parámetros | Retorno | Side Effects | Excepciones |
+|---|---|---|---|---|
+| `generate` | `document: Document` | `None` | Descarga blob de MinIO/S3; renderiza PNG (PDF primera página vía `pdf2image` con `first_page=1, last_page=1`; imágenes vía `Pillow`), resize a `settings.THUMBNAIL_MAX_SIZE`; sube a storage vía `StorageService.build_thumbnail_path()`; escribe `thumbnail_key` + `thumbnail_status` en DB; emite `AuditLog` con `metadata={"via":"thumbnail"}` | `TransientError` en fallo de storage recuperable — la task Celery reintenta; blobs permanentemente ausentes (`NoSuchKey`, 404) o archivo corrupto (excepción de Pillow/pdf2image al renderizar) no relanzan: marcan `thumbnail_status=FAILED` y retornan |
+
+**Flujo de `thumbnail_status`:**
+- `PROCESSING` → `READY` (PDF/imagen, renderizado exitoso)
+- `PROCESSING` → `SKIPPED` (mime distinto de `application/pdf`/`image/jpeg`/`image/png`, o `storage_path` vacío — ausencia de fuente, no fallo)
+- `PROCESSING` → `FAILED` (blob ausente de forma permanente o archivo corrupto)
+
+**Notas:**
+- Idempotente: sobreescribe el thumbnail anterior; seguro ante re-entrega de Celery.
+- Formato de salida siempre PNG (evita el problema de canal alfa vs JPEG).
+- Solo la primera página de un PDF se rasteriza (`first_page=1, last_page=1`), no el documento completo.
+- `thumbnail_url` (ver `DocumentSerializer`) es la única forma de acceder al thumbnail — `thumbnail_key` nunca se expone crudo en la API.
 
 ---
 
@@ -586,7 +613,7 @@ Roles que pueden actuar en cualquier paso independientemente del `required_role`
 |---|---|---|---|---|
 | `delete_orphan_blobs` | `grace_hours: int \| None = None` | `dict` (`{"scanned": int, "deleted": int, "skipped_grace": int}`) | Itera todos los objetos del bucket vía `StorageService.list_objects()`; llama `StorageService.delete_file(key)` por cada blob huérfano fuera del período de gracia; no modifica ninguna tabla de DB | Ninguna (silencia errores de storage individuales vía logger) |
 
-**Lógica de "blob vivo":** un blob se conserva si su `key` aparece en `Document.storage_path` (cualquier org) **o** en `DocumentVersion.storage_path` de versiones cuyo documento padre está vivo (`deleted_at IS NULL`), **o** si su `last_modified` es más reciente que `now() - grace_hours` (guarda de uploads en vuelo).
+**Lógica de "blob vivo":** un blob se conserva si su `key` aparece en `Document.storage_path` (cualquier org) **o** en `DocumentVersion.storage_path` de versiones cuyo documento padre está vivo (`deleted_at IS NULL`) **o** en `Document.thumbnail_key` de un documento vivo (Fase 6.2), **o** si su `last_modified` es más reciente que `now() - grace_hours` (guarda de uploads en vuelo).
 
 **Notas:**
 - Intencionalmente tenant-agnóstico: el bucket es global y las claves ya incluyen prefijo de org. Única excepción justificada a la regla de multi-tenancy (decisión de diseño cerrada #21).
@@ -745,6 +772,7 @@ semántico pasado.
 | `GET` | `/documents/{id}/versions/` | `IsOrganizationMember` | — | `DocumentVersionSerializer[]` |
 | `POST` | `/documents/{id}/versions/` | `editor+` | multipart: `DocumentVersionUploadSerializer` | `DocumentSerializer` (201) |
 | `POST` | `/documents/{id}/reprocess-ocr/` | `editor+` | — | `DocumentSerializer` (202) |
+| `POST` | `/documents/{id}/regenerate-thumbnail/` | `editor+` | — | `DocumentSerializer` (202) |
 | `POST` | `/documents/{id}/analyze/` | `editor+` | — | `DocumentSerializer` (202) |
 | `POST` | `/documents/{id}/start-workflow/` | `editor+` | `{template_id: UUID}` | `WorkflowExecutionSerializer` (201) |
 
@@ -876,6 +904,8 @@ Todos los campos son `read_only`.
 | `status` | DocumentStatus | writable (`draft`, `under_review` solo) |
 | `ocr_status` | OcrStatus | read-only |
 | `ocr_content` | string | read-only |
+| `thumbnail_status` | ThumbnailStatus | read-only (Fase 6.2) |
+| `thumbnail_url` | string \| null | read-only (Fase 6.2) — `SerializerMethodField`, presigned URL solo si `thumbnail_status == ready`, si no `None`. `thumbnail_key` nunca se expone crudo. |
 | `version` | int | read-only |
 | `tags` | string[] | writable |
 | `metadata` | object | writable (JSON libre; `ai_analysis` escrito por sistema) |
@@ -1029,9 +1059,21 @@ Igual que `DocumentSerializer` pero sin `checksum`, `ocr_content` y `metadata`. 
 |---|---|
 | `pending` | En cola (default al crear) |
 | `processing` | Worker activo |
-| `completed` | OCR exitoso |
-| `failed` | Error (reintentable) |
-| `skipped` | Tipo de archivo no soportado (office) |
+| `completed` | OCR/extracción exitosa (PDF, imagen o Office OOXML) |
+| `failed` | Error (reintentable solo si fue un fallo transitorio de storage) |
+| `skipped` | Tipo de archivo no soportado (Office legado `.doc`/`.xls`, `.zip`, otros) |
+
+---
+
+### `ThumbnailStatus` (`backend/apps/documents/models/document.py`, Fase 6.2)
+
+| Valor | Significado |
+|---|---|
+| `pending` | En cola (default al crear) |
+| `processing` | Worker activo |
+| `ready` | Thumbnail generado (nota: valor `"ready"`, no `"completed"` como `OcrStatus` — divergencia intencional) |
+| `failed` | Error permanente (blob ausente o archivo corrupto) — sin reintento |
+| `skipped` | Mime no soportado (solo PDF/imagen generan thumbnail) o `storage_path` vacío |
 
 ---
 
@@ -1793,6 +1835,26 @@ def process_ocr(self, document_id: str) -> None
 | Encolado por | `document_service.create_document` y `document_service.reprocess_ocr` vía `transaction.on_commit` |
 
 **Fallo definitivo:** si `Document.DoesNotExist` → log warning y retorno silencioso (el on_commit puede dispararse tras un rollback). Para errores no `TransientError` → la excepción se propaga y la task queda marcada como `FAILURE` sin más reintentos.
+
+---
+
+### `generate_thumbnail` (Fase 6.2)
+
+**Path:** `backend/apps/documents/tasks/document_tasks.py`
+
+```python
+@shared_task(bind=True, autoretry_for=(TransientError,), retry_backoff=True, retry_jitter=True, max_retries=3)
+def generate_thumbnail(self, document_id: str) -> None
+```
+
+| Atributo | Valor |
+|---|---|
+| Parámetros | `document_id: str` (UUID como string) |
+| Delega a | `thumbnail_service.generate(document)` |
+| Reintentos | `autoretry_for=(TransientError,)`, máx 3, con backoff + jitter |
+| Encolado por | `document_service.create_document` y `document_service.regenerate_thumbnail` vía `transaction.on_commit` |
+
+**Fallo definitivo:** si `Document.DoesNotExist` → log warning y retorno silencioso (mismo tratamiento que `process_ocr`). Para errores no `TransientError` → la excepción se propaga y la task queda marcada como `FAILURE` sin más reintentos.
 
 ---
 

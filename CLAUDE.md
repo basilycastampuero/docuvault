@@ -465,7 +465,7 @@ fix/{name}    ← Corrección de bugs
 
 ## 17. Estado actual del proyecto
 
-**Fase actual:** Fases de portafolio COMPLETAS (0–5). 5.1, 5.2, 5.3, 5.4, 5.5 y 5.7 COMPLETAS (5.5 completada 2026-06-29). Fase 6 (mejoras post-portafolio) en curso: 6.1 COMPLETA (2026-07-03); siguiente: 6.2.
+**Fase actual:** Fases de portafolio COMPLETAS (0–5). 5.1, 5.2, 5.3, 5.4, 5.5 y 5.7 COMPLETAS (5.5 completada 2026-06-29). Fase 6 (mejoras post-portafolio) en curso: 6.1 COMPLETA (2026-07-03); 6.2 backend COMPLETO (2026-07-06), frontend de 6.2 pendiente; siguiente: cerrar frontend de 6.2, luego 6.3.
 
 **Completado:**
 - Fase 0 — Setup: WSL2, Docker Compose (PG16+Redis7+MinIO), pre-commit hooks, .env.example
@@ -509,8 +509,9 @@ fix/{name}    ← Corrección de bugs
 - Refactor 2026-07-01 — Baja severidad: fallback ExecutionStatusBadge; Partial<PaginatedMeta> en getVersions; WRITE_ROLES centralizado en shared/lib/roles; cap de polling OCR/workflow; dead code audit eliminado
 - Features 2026-07-01 — FileTypeBadge (PDF/JPG/DOCX/XLSX/PPTX/etc. por mime_type, badge coloreado); fix desbordamiento de nombres largos en DocumentCard (overflow-hidden + min-w-0 en cadena de truncado)
 - Fase 6.1 (2026-07-03) — Refresh token JWT migrado de `localStorage` a cookie `HttpOnly Secure SameSite=Strict` (`sv_refresh`) con protección CSRF double-submit (`sv_csrf` + header `X-CSRF-Token`); `backend/apps/authentication/api/cookies.py` (helpers HTTP puros); `LoginView`/`TokenRefreshView`/`LogoutView` (esta última pasa a `AllowAny`); feature-flag `AUTH_REFRESH_COOKIE_ENABLED` (default on, fallback a body legado); proxy `/api` de Vite en dev (prerrequisito para `SameSite=Strict` cross-origin); `frontend/.env.example` creado (gap cerrado en la misma sub-fase); 4 commits (`76f6dc5`, `0e978eb`, `b2ac8e9`, `6701bc8`)
+- Fase 6.2 backend (2026-07-06, pendiente de commit) — Enriquecimiento documental: migración `0004_add_document_thumbnail_fields` (`thumbnail_status` enum `ThumbnailStatus` pending/processing/ready/failed/skipped + `thumbnail_key`); `thumbnail_service.generate()` (PDF primera página vía `pdf2image`, imágenes vía `Pillow`, resize a `THUMBNAIL_MAX_SIZE`=400px, sube a storage, audita `via=thumbnail`); `ocr_service` extendido con extracción de texto real para OOXML (`.docx` python-docx, `.xlsx` openpyxl) — Office legado (`.doc`/`.xls`) y `.zip` siguen `skipped`; `document_service.create_document` encola también `generate_thumbnail.delay`; nueva `regenerate_thumbnail()` (mismo patrón que `reprocess_ocr`); task `generate_thumbnail` (autoretry); endpoint `POST /documents/{id}/regenerate-thumbnail/`; `DocumentSerializer.thumbnail_url` (presigned, solo si `ready`) y `thumbnail_status`; `StorageService.build_thumbnail_path()`; `cleanup_orphan_blobs` preserva `thumbnail_key` vivo. Frontend (miniaturas, badge de estado, tipos TS) queda pendiente para una sesión posterior.
 
-**Métricas (2026-07-03):** 550 tests backend (95.62% cobertura) + 174 tests frontend. 0 errores TypeScript.
+**Métricas (2026-07-06):** 632 tests backend (98.69% cobertura) + 174 tests frontend. 0 errores TypeScript.
 
 **Apps activas:** `apps.core`, `apps.organizations`, `apps.authentication`, `apps.permissions`, `apps.audit`, `apps.documents`, `apps.workflows`, `apps.search`, `apps.notifications`
 
@@ -527,7 +528,7 @@ fix/{name}    ← Corrección de bugs
 9. Una sola ejecución activa por documento. Respaldado por `UniqueConstraint` parcial `uq_wf_exec_one_active_per_document`.
 10. `config`/`actions` (JSONB en template/step) se persisten pero NO se interpretan.
 11. FTS usa `config="simple"` (sin stemming). Signal `post_save` reconstruye `search_vector` solo si cambia campo de texto.
-12. OCR cubre solo PDF + imágenes. Office → `ocr_status=skipped`. `ocr_content` se expone en `DocumentSerializer` (read-only) y se muestra en `DocumentDetailPage` como pestaña condicional (solo si tiene contenido).
+12. OCR cubre PDF + imágenes (Tesseract) y, desde Fase 6.2, extracción directa de texto para Office **OOXML** (`.docx` vía `python-docx`, `.xlsx` vía `openpyxl`). Office **legado** (`.doc`/`.xls`) y `.zip` siguen `ocr_status=skipped` — no se pasan a los handlers OOXML. `ocr_content` se expone en `DocumentSerializer` (read-only) y se muestra en `DocumentDetailPage` como pestaña condicional (solo si tiene contenido).
 13. `ocr_status` es columna real (no JSONB). Default `pending`. Sin re-OCR masivo.
 14. OCR alimenta búsqueda automáticamente: `save(update_fields=["ocr_content"])` dispara signal FTS.
 15. Tareas llaman a services (CLAUDE.md §12). `process_ocr` fina, lógica en `ocr_service`.
@@ -557,8 +558,9 @@ fix/{name}    ← Corrección de bugs
 39. `FOLDER_UNSET = object()` sentinel en `document_service`: distingue "campo `folder_id` ausente del PATCH" de "usuario quiere mover a raíz (`folder=null`)". Sin sentinel, cualquier PATCH que no incluya `folder_id` movería el documento a la raíz.
 40. Endpoint `POST /documents/{id}/start-workflow/` vive en `documents/api/views.py` (no en workflows). Convención: cada `urls.py` importa solo views de su propia app. La dependencia cruzada `documents.views → workflows.services` es legítima en la capa de orquestación (una view puede llamar services de otro dominio).
 41. Refresh token de JWT vive en cookie `HttpOnly Secure SameSite=Strict` (`sv_refresh`), no en `localStorage` (supera la decisión #28). Access sigue en memoria. Protección CSRF double-submit (`sv_csrf` + header `X-CSRF-Token`) en refresh/logout. Rollout con feature-flag `AUTH_REFRESH_COOKIE_ENABLED` (default on, fallback a body legado). `LogoutView` es `AllowAny` — la identidad la da el refresh+blacklist, no el access.
+42. Thumbnails (Fase 6.2) siguen el mismo patrón que `ocr_status`: columnas reales `thumbnail_status` (enum `ThumbnailStatus`, valor `"ready"` en vez de `"completed"` — divergencia intencional respecto a `OcrStatus`) y `thumbnail_key` en `Document`, no JSONB. Formato de salida siempre PNG (evita el problema de canal alfa vs JPEG). Tamaño máximo configurable (`THUMBNAIL_MAX_SIZE`, default 400px del lado más largo). `storage_path` vacío → `skipped` (ausencia de fuente, no fallo); excepción de Pillow/pdf2image al renderizar (archivo corrupto) → `failed` permanente; solo errores de descarga del storage → `TransientError` con retry. `thumbnail_url` se expone inline en `DocumentSerializer` (no como endpoint aparte, a diferencia de `download`) para evitar N+1 de red al renderizar una grilla de documentos; la view comparte una única instancia de `StorageService` vía `context` al serializar listas. El path del thumbnail empieza por `{org_id}/` para no romper el tratamiento tenant-agnóstico de `cleanup_orphan_blobs` (decisión #21). No se reencola thumbnail automáticamente al subir una nueva versión de un documento — deuda técnica anotada, fuera de alcance de 6.2.
 
-**Próximo paso:** Proyecto completado en sus fases de portafolio (Fases 0–5). Fase 6 (mejoras post-portafolio) en curso: **6.1 — JWT en cookies httpOnly COMPLETA (2026-07-03)**. Sub-fase recomendada para continuar: **6.2 — Enriquecimiento documental** (thumbnails + extracción de texto Office), según el orden documentado en `docs/phase-plan.md` §'Orden de implementación recomendado'.
+**Próximo paso:** Proyecto completado en sus fases de portafolio (Fases 0–5). Fase 6 (mejoras post-portafolio) en curso: **6.1 — JWT en cookies httpOnly COMPLETA (2026-07-03)**; **6.2 — Enriquecimiento documental: backend COMPLETO (2026-07-06), frontend pendiente** (miniaturas en `DocumentCard`/`DocumentListPage`, `ThumbnailStatusBadge`, preview ampliado, tipos TS). Sub-fase recomendada para continuar: cerrar el frontend de 6.2 antes de avanzar a **6.3 — Notificaciones in-app en tiempo real**, según el orden documentado en `docs/phase-plan.md` §'Orden de implementación recomendado'.
 
 ## 18. Cómo correr el proyecto localmente
 
@@ -588,5 +590,5 @@ celery -A config.celery worker --loglevel=info
 | `docs/database-conventions.md` | Convenciones de base de datos |
 | `docs/reference.md` | Referencia técnica exhaustiva: modelos, services, selectors, endpoints, serializers, tipos TS, hooks, contrato FE-BE |
 | `CHANGELOG.md` | Historial de cambios por fase (formato Keep a Changelog): Added/Fixed/Changed con hash de commit |
-| `docs/error-registry.md` | Registro factual de todos los errores cometidos durante el desarrollo (67 errores, ERR-001 a ERR-067) con causa raíz y solución |
+| `docs/error-registry.md` | Registro factual de todos los errores cometidos durante el desarrollo (69 errores, ERR-001 a ERR-069) con causa raíz y solución |
 | `docs/ai-agent-guide.md` | Anti-patrones para agentes IA: TYPE_CONTRACT, REACT_STATE, MIGRATION, ENVELOPE, TENANT_ISOLATION, RBAC, SOFT_DELETE, ASYNC_CELERY, POLLING, GITIGNORE + checklist pre-PR |
