@@ -83,3 +83,9 @@ class StorageService:
         """Return a deterministic storage path: {org_id}/{YYYY}/{MM}/{doc_id}/{filename}."""
         now = datetime.now(UTC)
         return f"{org_id}/{now.year}/{now.month:02d}/{document_id}/{filename}"
+
+    @staticmethod
+    def build_thumbnail_path(org_id: str, document_id: str) -> str:
+        """Return the deterministic thumbnail path: {org_id}/{YYYY}/{MM}/{doc_id}/thumbnails/thumb.png."""
+        now = datetime.now(UTC)
+        return f"{org_id}/{now.year}/{now.month:02d}/{document_id}/thumbnails/thumb.png"

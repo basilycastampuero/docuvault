@@ -262,6 +262,16 @@ OCR_LANGUAGES = config("OCR_LANGUAGES", default="spa+eng")
 OCR_PDF_DPI = config("OCR_PDF_DPI", default=200, cast=int)
 
 # ---------------------------------------------------------------------------
+# Thumbnails — Pillow / pdf2image
+# ---------------------------------------------------------------------------
+
+# Longest side (px) of the generated thumbnail, aspect ratio preserved.
+THUMBNAIL_MAX_SIZE = config("THUMBNAIL_MAX_SIZE", default=400, cast=int)
+# DPI used to rasterize the first PDF page before thumbnailing. Lower than
+# OCR_PDF_DPI on purpose — a thumbnail does not need OCR-grade resolution.
+THUMBNAIL_PDF_DPI = config("THUMBNAIL_PDF_DPI", default=100, cast=int)
+
+# ---------------------------------------------------------------------------
 # AI Analysis (Claude API) — optional feature, disabled when key is empty
 # ---------------------------------------------------------------------------
 

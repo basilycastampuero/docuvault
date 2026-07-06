@@ -22,6 +22,14 @@ class OcrStatus(models.TextChoices):
     SKIPPED = "skipped", "Skipped"
 
 
+class ThumbnailStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    PROCESSING = "processing", "Processing"
+    READY = "ready", "Ready"
+    FAILED = "failed", "Failed"
+    SKIPPED = "skipped", "Skipped"
+
+
 class Document(BaseModel):
     organization = models.ForeignKey(
         "organizations.Organization",
@@ -64,6 +72,12 @@ class Document(BaseModel):
         choices=OcrStatus.choices,
         default=OcrStatus.PENDING,
     )
+    thumbnail_status = models.CharField(
+        max_length=20,
+        choices=ThumbnailStatus.choices,
+        default=ThumbnailStatus.PENDING,
+    )
+    thumbnail_key = models.CharField(max_length=500, blank=True, default="")
     search_vector = SearchVectorField(null=True)
 
     class Meta:

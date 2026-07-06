@@ -23,6 +23,7 @@ def delete_orphan_blobs(grace_hours: int | None = None) -> dict:
       - it is referenced by a live Document.storage_path, OR
       - it is referenced by a DocumentVersion.storage_path whose parent Document is
         alive, OR
+      - it is referenced by a live Document.thumbnail_key, OR
       - it was modified less than grace_hours ago (upload-in-flight guard).
     """
     grace = grace_hours if grace_hours is not None else settings.ORPHAN_BLOB_GRACE_HOURS
@@ -35,6 +36,11 @@ def delete_orphan_blobs(grace_hours: int | None = None) -> dict:
     live_paths.update(
         DocumentVersion.objects.filter(document__deleted_at__isnull=True).values_list(
             "storage_path", flat=True
+        )
+    )
+    live_paths.update(
+        Document.objects.exclude(thumbnail_key="").values_list(
+            "thumbnail_key", flat=True
         )
     )
     live_paths.discard("")  # guard: never treat empty path as a match

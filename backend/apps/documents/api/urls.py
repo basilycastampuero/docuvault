@@ -5,6 +5,7 @@ from .views import (
     DocumentDetailView,
     DocumentDownloadView,
     DocumentListCreateView,
+    DocumentRegenerateThumbnailView,
     DocumentReprocessOcrView,
     DocumentStartWorkflowView,
     DocumentVersionListView,
@@ -51,6 +52,11 @@ urlpatterns = [
         "documents/<uuid:document_id>/reprocess-ocr/",
         DocumentReprocessOcrView.as_view(),
         name="document-reprocess-ocr",
+    ),
+    path(
+        "documents/<uuid:document_id>/regenerate-thumbnail/",
+        DocumentRegenerateThumbnailView.as_view(),
+        name="document-regenerate-thumbnail",
     ),
     path(
         "documents/<uuid:document_id>/analyze/",

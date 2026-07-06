@@ -90,6 +90,36 @@ def _write_ai_failure_marker(document, document_id: str) -> None:
     logger.error("AI analysis permanently failed for document %s", document_id)
 
 
+@shared_task(
+    bind=True,
+    autoretry_for=(TransientError,),
+    retry_backoff=True,
+    retry_jitter=True,
+    max_retries=3,
+)
+def generate_thumbnail(self, document_id: str) -> None:
+    """Render a thumbnail for a document.
+
+    Thin dispatcher (CLAUDE.md §12): the logic lives in thumbnail_service. Retries
+    only on TransientError (recoverable); any other exception propagates and the
+    task is marked failed without retrying. A missing document is treated as
+    permanent — the on_commit hook may have fired for a transaction that rolled back.
+    """
+    # Lazy imports avoid import cycles between tasks and the documents app models.
+    from apps.documents.models import Document
+    from apps.documents.services import thumbnail_service
+
+    try:
+        document = Document.objects.get(id=document_id)
+    except Document.DoesNotExist:
+        logger.warning(
+            "generate_thumbnail: document %s not found; skipping", document_id
+        )
+        return
+
+    thumbnail_service.generate(document)
+
+
 @shared_task
 def cleanup_orphan_blobs() -> dict:
     """Daily Beat task. Thin dispatcher → cleanup_service (CLAUDE.md §12)."""

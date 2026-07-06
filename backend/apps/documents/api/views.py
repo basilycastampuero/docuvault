@@ -30,6 +30,7 @@ from apps.documents.selectors import (
     get_root_folders,
 )
 from apps.documents.services import document_service, folder_service
+from apps.documents.storage import StorageService
 from apps.permissions.permissions import HasRole, IsOrganizationMember
 
 logger = logging.getLogger(__name__)
@@ -196,7 +197,9 @@ class FolderDocumentsView(APIView):
         qs = get_documents(organization=request.organization, folder=folder)
         paginator = StandardPagination()
         page = paginator.paginate_queryset(qs, request)
-        serializer = DocumentSerializer(page, many=True)
+        serializer = DocumentSerializer(
+            page, many=True, context={"storage": StorageService()}
+        )
         return paginator.get_paginated_response(serializer.data)
 
 
@@ -219,7 +222,9 @@ class DocumentListCreateView(APIView):
         )
         paginator = StandardPagination()
         page = paginator.paginate_queryset(qs, request)
-        serializer = DocumentSerializer(page, many=True)
+        serializer = DocumentSerializer(
+            page, many=True, context={"storage": StorageService()}
+        )
         return paginator.get_paginated_response(serializer.data)
 
     @extend_schema(
@@ -336,8 +341,6 @@ class DocumentDownloadView(APIView):
         },
     )
     def get(self, request: Request, document_id) -> Response:
-        from apps.documents.storage import StorageService
-
         doc = get_document_by_id(
             organization=request.organization, document_id=document_id
         )
@@ -361,6 +364,28 @@ class DocumentReprocessOcrView(APIView):
             organization=request.organization, document_id=document_id
         )
         doc = document_service.reprocess_ocr(
+            organization=request.organization, user=request.user, document=doc
+        )
+        return Response(
+            {"data": DocumentSerializer(doc).data}, status=status.HTTP_202_ACCEPTED
+        )
+
+
+@extend_schema(tags=["Documents"])
+class DocumentRegenerateThumbnailView(APIView):
+    permission_classes = [IsOrganizationMember]
+
+    @extend_schema(
+        summary="Re-generate the thumbnail for a document",
+        request=None,
+        responses={202: DocumentSerializer},
+    )
+    def post(self, request: Request, document_id) -> Response:
+        FolderListCreateView._require_editor(request)
+        doc = get_document_by_id(
+            organization=request.organization, document_id=document_id
+        )
+        doc = document_service.regenerate_thumbnail(
             organization=request.organization, user=request.user, document=doc
         )
         return Response(

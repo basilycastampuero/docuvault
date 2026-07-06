@@ -17,9 +17,10 @@ from apps.documents.models import (
     DocumentVersion,
     Folder,
     OcrStatus,
+    ThumbnailStatus,
 )
 from apps.documents.storage import StorageService, validate_file
-from apps.documents.tasks.document_tasks import process_ocr
+from apps.documents.tasks.document_tasks import generate_thumbnail, process_ocr
 
 if TYPE_CHECKING:
     from apps.authentication.models import User
@@ -94,6 +95,7 @@ def create_document(
     )
 
     transaction.on_commit(lambda: process_ocr.delay(str(doc.id)))
+    transaction.on_commit(lambda: generate_thumbnail.delay(str(doc.id)))
     logger.info("Document created: %s (org=%s)", doc.id, organization.id)
     return doc
 
@@ -283,6 +285,32 @@ def reprocess_ocr(
     )
     transaction.on_commit(lambda: process_ocr.delay(str(document.id)))
     logger.info("OCR reprocess requested: %s (org=%s)", document.id, organization.id)
+    return document
+
+
+@transaction.atomic
+def regenerate_thumbnail(
+    organization: "Organization",
+    user: "User",
+    document: Document,
+) -> Document:
+    """Re-trigger thumbnail generation for a document. The task is dispatched after
+    commit so the worker never picks it up before this transaction is durable."""
+    document.thumbnail_status = ThumbnailStatus.PENDING
+    document.save(update_fields=["thumbnail_status", "updated_at"])
+
+    audit_service.log(
+        organization=organization,
+        user=user,
+        entity_type="document",
+        entity_id=str(document.id),
+        action=AuditAction.UPDATE,
+        metadata={"via": "thumbnail_regenerate"},
+    )
+    transaction.on_commit(lambda: generate_thumbnail.delay(str(document.id)))
+    logger.info(
+        "Thumbnail regenerate requested: %s (org=%s)", document.id, organization.id
+    )
     return document
 
 

@@ -1,6 +1,13 @@
 from rest_framework import serializers
 
-from apps.documents.models import Document, DocumentStatus, DocumentVersion, Folder
+from apps.documents.models import (
+    Document,
+    DocumentStatus,
+    DocumentVersion,
+    Folder,
+    ThumbnailStatus,
+)
+from apps.documents.storage import StorageService
 
 
 class FolderSerializer(serializers.ModelSerializer):
@@ -45,6 +52,7 @@ class DocumentSerializer(serializers.ModelSerializer):
         source="folder.name", read_only=True, allow_null=True
     )
     created_by_email = serializers.CharField(source="created_by.email", read_only=True)
+    thumbnail_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Document
@@ -58,6 +66,8 @@ class DocumentSerializer(serializers.ModelSerializer):
             "status",
             "ocr_status",
             "ocr_content",
+            "thumbnail_status",
+            "thumbnail_url",
             "version",
             "tags",
             "metadata",
@@ -74,12 +84,26 @@ class DocumentSerializer(serializers.ModelSerializer):
             "checksum",
             "ocr_status",
             "ocr_content",
+            "thumbnail_status",
+            "thumbnail_url",
             "version",
             "folder_name",
             "created_by_email",
             "created_at",
             "updated_at",
         ]
+
+    def get_thumbnail_url(self, obj: Document) -> str | None:
+        """Return a presigned URL for the thumbnail, or None if it is not ready yet.
+
+        Uses `self.context["storage"]` when provided by the view (shared across a
+        `many=True` list to avoid instantiating one StorageService per document);
+        falls back to a fresh instance for single-object serialization.
+        """
+        if obj.thumbnail_status != ThumbnailStatus.READY or not obj.thumbnail_key:
+            return None
+        storage = self.context.get("storage") or StorageService()
+        return storage.get_presigned_url(obj.thumbnail_key)
 
 
 class DocumentUploadSerializer(serializers.Serializer):
