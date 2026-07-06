@@ -11,10 +11,72 @@
 > Parte 5 (al final) es el diario vivo de las Fases 2 y 3 — empezá por ahí si querés saber
 > dónde estamos hoy.
 >
-> Última actualización: **Fase 6.2 (enriquecimiento documental) COMPLETA — backend y frontend**
-> (2026-07-06). Rama `feature/5.2-frontend-documents`, frontend pendiente de commit.
+> Última actualización: **Diseño de Fase 6.3 (notificaciones in-app realtime) aprobado — pendiente
+> de implementación** (2026-07-06). Rama `feature/5.2-frontend-documents`.
 > Proyecto de portafolio completado (Fases 0–5). Fase 6 = mejoras post-portafolio, en ejecución
-> (6.1 completa, 6.2 completa, 6.3 siguiente).
+> (6.1 completa, 6.2 completa, 6.3 diseñada y lista para ejecutar, no implementada).
+
+---
+
+### 2026-07-06 — Diseño de Fase 6.3 (notificaciones in-app realtime) — pendiente de implementación
+
+Sesión puramente de diseño, sin una línea de código de producción tocada. Flujo de agentes:
+**software-architect** (investigación contra el código real + diseño detallado con decisiones
+D0–D8) → **docs-manager** (esta entrada y la sincronización de `docs/phase-plan.md`/`CLAUDE.md`) →
+**git-operator** (commit de esta documentación, pendiente al cierre de la sesión).
+
+**Por qué esta sub-fase necesitaba diseño previo antes de tocar código.** 6.3 mezcla tres cosas que
+no habían aparecido juntas en el proyecto hasta ahora: un canal de notificación nuevo (`in_app`,
+hoy solo existe `email`), un transporte realtime (SSE, primera vez que el proyecto expone una
+conexión HTTP de larga vida) y el cierre de una deuda de concurrencia documentada desde Fase 5.7
+(la semántica at-least-once de la decisión #34). Cada una por separado sería sencilla; juntas
+interactúan con una restricción de infraestructura que no era obvia de entrada.
+
+**El hallazgo que cambió el enfoque.** El `software-architect` revisó `docker-compose.prod.yml` y
+encontró que el servicio `web` corre Gunicorn con 2 workers **`sync`** y `--timeout 120`. Un stream
+SSE de larga vida ocupa un worker `sync` completo mientras dura la conexión — con solo 2 workers,
+bastarían 2 clientes con la pestaña abierta para dejar sin capacidad al resto de la API, y el
+timeout de 120s mataría cualquier stream igualmente. Esto no se puede resolver solo con código de
+aplicación: obligó a una decisión de infraestructura (migrar el worker class a `gthread`, con 8
+threads por worker) que quedó registrada como **D0**, la primera decisión del diseño y la que
+condiciona a las demás.
+
+**El segundo punto delicado: cómo autenticar una conexión SSE.** `EventSource`, la API nativa del
+navegador para SSE, no permite mandar headers custom — no hay forma de adjuntar
+`Authorization: Bearer` como en cualquier otra request. Se evaluaron tres opciones: token en query
+param (descartado, queda expuesto en logs de acceso y en el header `Referer`), meter el access
+token en una cookie (descartado, deshace exactamente el trade-off de seguridad que cerró la Fase
+6.1 hace tres días), y un **ticket efímero de un solo uso en Redis** (elegida, **D1**): el cliente
+pide un ticket autenticado normalmente por REST, lo consume una única vez al abrir el stream
+(`GETDEL` atómico), y el ticket expira en 60 segundos si no se usa. Consecuencia directa: el
+auto-reconnect nativo de `EventSource` quedó deshabilitado a propósito (**D7**) porque reintentaría
+con un ticket ya consumido y siempre fallaría — la reconexión la gestiona el hook del frontend
+pidiendo un ticket nuevo cada vez.
+
+**Alcance de la exactly-once (decisión #34).** El diseño distingue explícitamente qué canal puede
+prometer exactly-once real y cuál no (**D3**): `in_app` sí, porque publicar el mismo nudge dos veces
+por Redis pub/sub es inofensivo (el cliente solo re-invalida queries); `email` sigue siendo
+best-effort, porque un crash entre el `send_mail()` exitoso y el `save(status=sent)` puede duplicar
+un correo real y no hay forma de evitarlo sin un outbox transaccional de email (fuera de alcance).
+Se prefirió documentar la semántica honesta a fingir una garantía que el sistema no puede cumplir.
+
+**Qué NO se diseñó a propósito.** Sin `Last-Event-ID` ni replay de eventos perdidos (**D2**): el
+stream es un canal de "nudge", no la fuente de verdad — si el cliente estuvo desconectado, el
+REST (`GET /notifications/`) sigue siendo autoritativo y el frontend simplemente refetchea al
+reconectar. Esto evitó tener que diseñar persistencia de eventos de stream, que hubiera sido
+sobre-ingeniería para el caso real.
+
+**Estado del entregable.** El diseño íntegro (hallazgos verificados contra código, decisiones D0–D8,
+arquitectura de flujo, plan de archivos backend y frontend, cambio exacto de `nginx.conf`, riesgos
+R1–R9 con mitigación, y plan de implementación en fases A–G) quedó documentado en
+`docs/phase-plan.md` §6.3, reemplazando el boceto de alto nivel que existía ahí desde el 2026-07-01.
+Está marcado explícitamente como **"Diseño aprobado — pendiente de implementación"**: ninguna línea
+de código, migración ni test de esta sub-fase se escribió en esta sesión. Las decisiones D0–D8 se
+promoverán a decisiones numeradas de `CLAUDE.md` §17 (a partir de la #43) recién cuando se
+implemente, siguiendo el mismo criterio ya aplicado en 6.1 y 6.2. Queda anotado también evaluar un
+ADR formal para D0 (cambio de worker class) y D1 (mecanismo de auth de SSE) al momento de
+implementar — ambas son decisiones de las que otro dev o agente podría dudar sin ver el contexto
+completo.
 
 ---
 

@@ -2658,7 +2658,7 @@ contra PostgreSQL real con test explícito de aislamiento de tenant.
 |----------|------|--------------|---------------------|:---:|:---:|:---:|:---:|
 | 6.1 ✅ 2026-07-03 | JWT en cookies httpOnly | #28→#41 | Seguridad de auth / XSS-CSRF | ✅ | ✅ | — | M |
 | 6.2 ✅ 2026-07-06 | Enriquecimiento documental (thumbnails + texto Office) | Diferidos #3, #4 | Pipeline async de media | ✅ | ✅ | — | M |
-| 6.3 | Notificaciones in-app en tiempo real | #34, diferido notif. | Realtime (SSE) + entrega exactly-once | ✅ | ✅ | — | L |
+| 6.3 📐 diseñada (2026-07-06) | Notificaciones in-app en tiempo real | #34, diferido notif. | Realtime (SSE) + entrega exactly-once | ✅ | ✅ | ✅ | L |
 | 6.4 | Observabilidad avanzada | Diferidos #5, #6 | SRE / métricas / monitoreo | ✅ | — | ✅ | M |
 | 6.5 | Madurez de frontend (paginación, i18n, dark mode, E2E) | #38, diferidos i18n/dark/E2E | Frontend profesional + E2E | — | ✅ | — | M |
 | 6.6 | `apps/billing` — planes, suscripciones y cuotas | Skeleton dormido | Modelado de dominio SaaS + Stripe | ✅ | ✅ | — | L |
@@ -2899,47 +2899,244 @@ Actualiza la decisión de diseño #12 (Office ya no es 100% `skipped`: OOXML se 
 decisión **#42** en `CLAUDE.md` §17 (diseño de thumbnails). Ver entradas de BITÁCORA del 2026-07-06
 (backend y frontend).
 
+> **⚠️ RECORDATORIO PENDIENTE — sincronizar `README.md`.** El README quedó desactualizado desde
+> antes de 6.1 (tabla de fases marca "5.5 🔄 Next", contador de tests en "~526, 95%"). Cada
+> `docs-manager` que pasó por 6.1 y 6.2 lo detectó pero lo dejó fuera de alcance por instrucción
+> explícita de la sesión. **Cuando se dé por cerrada la Fase 6** (o la sub-fase que el usuario
+> indique como punto de sincronización), actualizar: tabla de fases/estado, contador de tests
+> backend+frontend, y cualquier badge/sección que referencie métricas desactualizadas. No asumir
+> que "ya se hizo" sin verificar el archivo real — este recordatorio debe borrarse recién cuando
+> el README quede efectivamente sincronizado.
+
 ---
 
 ### 6.3 — Notificaciones in-app en tiempo real + entrega exactly-once
 
+> ## 📐 Diseño aprobado (2026-07-06) — PENDIENTE DE IMPLEMENTACIÓN
+>
+> El `software-architect` produjo un diseño detallado de esta sub-fase, verificado línea por línea
+> contra el código real (no contra el boceto previo). Este documento reemplaza el boceto de alto
+> nivel que existía antes. **No se implementó nada en esta sesión** — el diseño queda cerrado y
+> listo para ejecutar en una sesión futura siguiendo el plan de fases A–G de la sección
+> "Plan de implementación" más abajo. Ninguna sección de esta entrada debe interpretarse como
+> "hecho"; los checkboxes `[x]` de 6.1/6.2 (arriba) NO aparecen aquí a propósito.
+
 **Objetivo.** Sumar canal `in_app` al subsistema de notificaciones (Fase 5.7, hoy solo email), con
-entrega en tiempo real al frontend, ampliar los eventos notificados (reject/cancel/complete) y saldar
-la deuda exactly-once (decisión #34).
+entrega en tiempo real al frontend vía SSE, ampliar los eventos notificados (reject/cancel/complete)
+y saldar la deuda exactly-once (decisión #34).
 
 **Motivación.** Diferenciador visual más fuerte: realtime UX + mensajería robusta. Cierra las deudas
 del canal in-app diferido, eventos de workflow adicionales y la semántica at-least-once (#34).
 
-**Decisiones arquitectónicas:**
+#### Hallazgo que condiciona todo el diseño
 
-1. **Transporte realtime: SSE.** El caso es estrictamente server→client; SSE funciona sobre HTTP/1.1,
-   atraviesa Nginx con `proxy_buffering off`, no requiere ASGI/Django Channels. WebSockets/Channels se
-   descartan (sobre-ingeniería para flujo unidireccional — decisión global #4).
-2. **Modelo de datos.** Extender `Notification` existente con `read_at` (nullable) y ampliar `channel`
-   choices con `in_app`. Choice `processing` para exactly-once. Índice parcial
-   `idx_notifications_org_recipient_unread` con `condition=Q(read_at__isnull=True)`.
-3. **Exactly-once (#34).** Estado `processing` + sweep task Beat que re-encola notificaciones colgadas
-   en `processing` más de N minutos. Ciclo: pending → processing → sent con timeout. Requiere migración
-   (nuevo choice) + task nueva.
-4. **Eventos ampliados.** `workflow_service` emite notificaciones en reject/cancel/complete vía
-   `transaction.on_commit` (patrón Fase 5.7). Un `notification_service.notify_*` por evento.
-5. **Autorización del stream SSE.** Autenticación por JWT (Bearer); filtro siempre por
-   `request.organization` + `request.user`. Aislamiento de tenant en el canal realtime = requisito de
-   seguridad; se testea explícitamente.
+El servicio `web` de producción corre Gunicorn con **2 workers `sync`** y `--timeout 120`
+(`docker-compose.prod.yml:31-35`). Un `StreamingHttpResponse` de larga vida ocupa un worker `sync`
+completo mientras dure la conexión: con 2 workers, **2 streams SSE concurrentes bloquean todo el
+resto del tráfico HTTP** del proceso, y `--timeout 120` mataría cualquier stream a los 120s. No es
+un detalle de infra — obliga a una decisión de arquitectura de servidor (ver D0).
 
-**Entregables:**
-- Backend: migración `Notification` (nuevos choices, `read_at`, índice parcial); `notification_service`
-  canal in-app + eventos reject/cancel/complete; sweep task Beat; endpoints `GET /api/v1/notifications/`
-  (lista paginada con `unread_count` en `meta`), `POST /api/v1/notifications/{id}/read/`,
-  `POST /api/v1/notifications/read-all/`, `GET /api/v1/notifications/stream/` (SSE).
-- Frontend: `NotificationBell` en Header con badge; hook `useNotifications` + suscripción SSE;
-  `NotificationsPage`; toasts para eventos entrantes; reconexión con backoff del `EventSource`.
-- Tests: notificación in-app en cada evento de workflow; `unread_count` correcto; aislamiento de tenant
-  en lista y stream SSE; sweep re-encola `processing` colgadas; no reenvía `sent`; on_commit.
+#### Estado actual (verificado en código, no en el boceto previo)
 
-**Complejidad:** L. **Riesgo:** medio-alto — SSE detrás de Nginx requiere `proxy_buffering off` +
-timeouts largos. Documentar en `nginx.conf`. Considerar worker async/gthread dedicado para el endpoint
-SSE o límite de conexiones concurrentes.
+- `apps/notifications/models/notification.py`: `Notification(BaseModel)` con FK `organization`
+  (CASCADE) y `recipient` (PROTECT). `channel` = solo `EMAIL`. `status` = `pending/sent/failed`.
+  Campos `sent_at`, `metadata` (JSONB). Índices: `idx_notifs_org_recipient`,
+  `idx_notifs_org_status`. **No existe `read_at`.**
+- `notification_service.py`: `notify_step_assigned()` crea 1 row por recipient y agenda
+  `_dispatch_send` vía `transaction.on_commit`. `_send()` hace un claim atómico
+  `UPDATE ... WHERE status IN (pending, failed) → sent` con `rowcount` (semántica at-least-once
+  documentada en el propio docstring — decisión #34). `_render_body()` arma texto plano.
+- `notification_selector.py`: solo `get_recipients_for_role(organization, role) -> QuerySet[User]`.
+  **No hay selector de listado de notificaciones para un usuario.**
+- `notification_tasks.py`: `send_notification(notification_id)` con `autoretry_for=(TransientError,)`,
+  `retry_backoff`, `max_retries=3`. Thin dispatcher → `_send`.
+- `apps/notifications/` **NO tiene capa `api/`** (ni views, ni urls, ni serializers). Todo el REST +
+  SSE de esta sub-fase es net-new.
+- `workflow_service.py`: puntos de instrumentación confirmados, dentro de `@transaction.atomic`:
+  `advance_step` rama `REJECTED` (línea ~312-319) y rama `APPROVED`+`is_final`→`COMPLETED`
+  (línea ~321-329); `cancel_workflow` (línea ~392-398). `_notify_step_assigned` (línea 411) ya usa
+  lazy import + `on_commit` — patrón a replicar para los 3 eventos nuevos.
+- Auth: JWT access (60 min) en memoria (Zustand), refresh en cookie `HttpOnly` `sv_refresh`
+  (Fase 6.1). **`EventSource` nativo no puede mandar el header `Authorization`** — punto de diseño
+  más delicado (ver D1).
+- Frontend: `api-client.ts` (axios, cola de refresh, unwrap de envelope), `Header.tsx` sin campana de
+  notificaciones aún.
+- Infra: `nginx/nginx.conf` sin `proxy_buffering off` ni timeouts largos — incompatible con SSE tal
+  cual está hoy.
+- Celery Beat: `CELERY_BEAT_SCHEDULE` estático en `base.py`; única entrada hoy es
+  `cleanup-orphan-blobs-daily`.
+
+#### Decisiones arquitectónicas (D0–D8) — cerradas para el diseño, a ejecutar tal cual
+
+- **D0 — Worker class del servicio `web`: migrar de `sync` a `gthread`.** Decisión bloqueante.
+  `gunicorn ... --worker-class gthread --workers 2 --threads 8 --timeout 120`. Un stream ocupa un
+  thread, no un worker completo; 2×8=16 slots concurrentes. Sigue siendo WSGI puro, sin
+  ASGI/Channels. Alternativa descartada: `gevent` (más eficiente pero añade dependencia y riesgo de
+  incompatibilidad con psycopg/boto3).
+- **D1 — Auth del stream SSE: ticket efímero de un solo uso en Redis.** `EventSource` no manda
+  headers custom. Se descartan: (a) token en query param — queda en logs/Referer; (b) access token
+  en cookie — deshace el trade-off de seguridad de 6.1. Elegida (c): el cliente ya autenticado llama
+  `POST /notifications/stream-ticket/`, el backend genera un token opaco
+  (`secrets.token_urlsafe(32)`), lo guarda en Redis con TTL 60s y lo devuelve; el cliente abre
+  `EventSource(...?ticket=xxx)`; el endpoint hace `GETDEL` atómico del ticket (consumo de un solo
+  uso) y resuelve org/user sin pasar por la middleware JWT normal.
+- **D2 — El stream SSE es un canal de nudge (invalidación), no de datos autoritativos.** Payload
+  mínimo por evento; la fuente de verdad sigue siendo el REST (`GET /notifications/`). Al recibir
+  cualquier evento, el frontend invalida queries y refetch. Consecuencia: **no** se implementa
+  `Last-Event-ID`/replay — simplifica mucho el backend (sin persistencia de stream).
+- **D3 — Exactly-once estricto solo para `in_app`, best-effort para `email`.** Un crash entre
+  `send_mail()` exitoso y el `save(sent)` puede duplicar el email (inherente, no solucionable sin
+  outbox transaccional de email, fuera de alcance). Para `in_app`, publicar el nudge dos veces es
+  idempotente (el cliente solo re-invalida). Se documenta la semántica honesta, no se pretende
+  exactly-once real de email.
+- **D4 — Ambos canales pasan por el mismo pipeline `send_notification`/`_send`.** Ramifica por
+  `channel`. Unifica el estado `processing`+sweep para ambos canales en una sola máquina de estados.
+- **D5 — Fan-out por canal = una row por (recipient, canal).** `notify_step_assigned` genera
+  `[email, in_app]`; los eventos nuevos (reject/cancel/complete) generan solo `in_app` (email para
+  esos eventos queda fuera de alcance de 6.3).
+- **D6 — Destinatario de eventos terminales (reject/cancel/complete) = `execution.started_by`.**
+  Evita fan-out masivo a roles; notifica a quien inició el workflow.
+- **D7 — Reconexión gestionada por el cliente con backoff exponencial+jitter; auto-reconnect nativo
+  de `EventSource` deshabilitado.** Como el ticket es single-use, el auto-reconnect nativo (que
+  reintentaría con el mismo ticket ya consumido) siempre fallaría. El hook cierra la conexión en
+  error y pide un ticket **nuevo** antes de reconectar.
+- **D8 — SSE es la 2ª excepción documentada al envelope `{data,meta}`** (la 1ª es `/health/`,
+  decisión #24). Los 3 endpoints REST complementarios (list/read/read-all) sí usan el envelope.
+  Límite de máx. 3 streams concurrentes por usuario (contador en Redis) para proteger los 16 threads
+  de D0 de agotamiento por un solo cliente.
+
+#### Arquitectura (flujo resumido)
+
+`workflow_service` (dentro de `@transaction.atomic`) crea `Notification` rows por canal →
+`transaction.on_commit` agenda `send_notification.delay` → Celery `_send()` hace claim atómico
+`pending/failed→processing` → rama por canal: `email`→`send_mail`→`sent`; `in_app`→Redis `PUBLISH`
+en canal `sse:notif:{org}:{user}`→`sent` → la view SSE (suscrita a ese canal Redis) reenvía el
+evento al `EventSource` del navegador + heartbeat cada 15s → el hook frontend invalida queries de
+TanStack Query → UI se actualiza (badge, toast).
+
+Máquina de estados: `PENDING` → (claim) → `PROCESSING` → `SENT`; error transitorio → `FAILED` →
+reintento/reclaim; `PROCESSING` colgada > N minutos → sweep la resetea a `PENDING` y reencola.
+
+#### Plan de archivos — Backend
+
+- **Migración** `apps/notifications/migrations/0002_notification_in_app_realtime.py`: `AlterField
+  channel` (choices `email`/`in_app`), `AlterField status` (añade `processing`), `AddField read_at`
+  (`DateTimeField(null=True, blank=True)`), `AddIndex` parcial
+  `idx_notifs_org_recipient_unread` (`fields=["organization","recipient"]`,
+  `condition=Q(read_at__isnull=True)`).
+- **`models/notification.py`:** enums `NotificationChannel`/`NotificationStatus` ampliados; campo
+  `read_at`; propiedad `is_read`.
+- **`selectors/notification_selector.py`** (nuevas funciones): `get_notifications_for_user(organization,
+  user, unread_only=False)`, `get_unread_count(organization, user) -> int`,
+  `get_notification_for_user(organization, user, notification_id)`. Todas filtran por `organization`
+  Y `recipient` — aislamiento de tenant obligatorio, testeado con dos orgs.
+- **`services/notification_service.py`** (ampliado): `create_notifications(organization, recipients,
+  subject, body, channels: list[str], metadata=None)` (crea 1 row por recipient×canal); `_send`
+  refactorizado con ciclo `pending→processing→sent/failed` y branch por canal; `_publish_in_app(notification)`;
+  `mark_as_read`/`mark_all_as_read` (sin auditoría, igual que decisión #6 sobre lectura); nuevas
+  `notify_workflow_rejected/completed/cancelled(organization, execution, actor)`.
+- **`services/ticket_service.py`** (nuevo): `issue_stream_ticket(organization, user) -> str`,
+  `consume_stream_ticket(ticket) -> tuple[str,str]|None` (GETDEL atómico en Redis).
+- **`services/sse_service.py`** (nuevo): `event_stream(organization_id, user_id) -> Iterator[bytes]`
+  — generador que se suscribe a `sse:notif:{org}:{user}` vía Redis pub/sub, emite heartbeat cada
+  `SSE_HEARTBEAT_SECONDS`, se auto-cierra tras `SSE_MAX_LIFETIME_SECONDS`, y lleva contador de
+  concurrencia en Redis (`sse:conns:{org}:{user}`).
+- **`apps/notifications/api/` (net-new, no existía):** `serializers.py` (`NotificationSerializer`
+  con `is_read`), `views.py` (`NotificationListView` paginado con `unread_count` en meta;
+  `NotificationReadView`; `NotificationReadAllView`; `StreamTicketView`; `NotificationStreamView` —
+  esta última `authentication_classes=[]`, `permission_classes=[AllowAny]`, auth por ticket, no por
+  Bearer), `urls.py`. Registrar en `config/api_urls.py`.
+- **Contrato REST** (envelope estándar): `GET /api/v1/notifications/?unread=true` →
+  `{"data":[...],"meta":{...,"unread_count":N}}`; `POST /notifications/{id}/read/`;
+  `POST /notifications/read-all/`; `POST /notifications/stream-ticket/` →
+  `{"data":{"ticket","expires_in":60}}`.
+- **Contrato SSE** (excepción al envelope, D8): `GET /api/v1/notifications/stream/?ticket=...` →
+  `text/event-stream`, frames `event: notification\ndata: {"id","type","subject","created_at","unread_count"}\n\n`
+  + comentarios heartbeat.
+- **`tasks/notification_tasks.py`** (nueva): `sweep_stuck_notifications()` — resetea a `pending` y
+  reencola notificaciones en `processing` con `updated_at` más viejo que
+  `NOTIF_SWEEP_STUCK_MINUTES` (default 10 min). Entrada nueva en `CELERY_BEAT_SCHEDULE`
+  (`crontab(minute="*/5")`).
+- **`workflow_service.py`:** helpers lazy-import
+  `_notify_workflow_rejected/completed/cancelled`, llamados vía `transaction.on_commit` en los 3
+  puntos ya identificados (`advance_step` rechazo/completado, `cancel_workflow`).
+- **Settings nuevos:** `SSE_HEARTBEAT_SECONDS` (15), `SSE_MAX_LIFETIME_SECONDS` (300),
+  `SSE_MAX_CONNECTIONS_PER_USER` (3), `SSE_TICKET_TTL_SECONDS` (60),
+  `NOTIF_SWEEP_STUCK_MINUTES` (10).
+
+#### Plan de archivos — Frontend
+
+`features/notifications/api.ts`, `types.ts`, `hooks.ts` (`useNotifications`, `useUnreadCount`,
+`useMarkAsRead`, `useMarkAllAsRead`); `features/notifications/useNotificationStream.ts` (hook
+central: pide ticket → abre `EventSource` → `onmessage` invalida queries + toast → `onerror` cierra
+y reconecta con backoff exponencial+jitter pidiendo ticket **nuevo**); `shared/components/NotificationBell.tsx`
+(badge en `Header.tsx`); `features/notifications/pages/NotificationsPage.tsx` (ruta `/notifications`);
+montaje único de `useNotificationStream()` en `AppLayout`.
+
+#### nginx — cambio exacto necesario
+
+Añadir `location = /api/v1/notifications/stream/` (**antes** del `location /api/` genérico, nginx
+matchea por prefijo más específico) con `proxy_http_version 1.1`, `proxy_set_header Connection ''`,
+`proxy_buffering off` (crítico), `proxy_cache off`, `proxy_read_timeout 3600s`,
+`chunked_transfer_encoding on`.
+
+#### Riesgos principales
+
+R1 streams agotan workers Gunicorn sync (mitigado por D0 `gthread` + D8 cap de 3/usuario + lifetime
+máximo); R2 nginx bufferea el stream (mitigado por `proxy_buffering off` + header
+`X-Accel-Buffering: no`); R3 timeouts matan el stream (mitigado por `proxy_read_timeout 3600s` +
+heartbeat); R4 JWT/ticket filtrado por logs (mitigado por ticket opaco single-use TTL 60s); R5 fuga
+cross-tenant en stream o lista (mitigado por canal Redis namespaced por org+user + selectores
+siempre filtrados; test explícito obligatorio); R6 email duplicado por sweep (aceptado y
+documentado, D3); R7 pub/sub pierde eventos si el cliente está desconectado (aceptado, D2 — REST es
+la fuente de verdad); R8 tormenta de reconexión (mitigado por backoff+jitter); R9 conexión Redis por
+stream agota el pool (acotado por los caps de D0/D8).
+
+Alternativa de infra anotada pero no recomendada aún: aislar el stream en un proceso Gunicorn
+separado (`web-sse`) — reservar para si pruebas de carga futuras muestran contención.
+
+#### Plan de implementación (orden y dependencias, para la sesión que lo ejecute)
+
+Fase A (modelo/migración, sin dependencias) → Fase B (servicio + pipeline exactly-once, depende de
+A) → Fase C (REST endpoints, depende de B) y Fase D (ticket+SSE, depende de B, paralelizable con C)
+→ Fase E (infra: worker class + nginx, depende de D para probar) → Fase F (frontend, depende de
+C+D) → Fase G (instrumentación workflow, depende de B, puede ir con F). Cada fase debe cerrar con
+tests en verde antes de avanzar a la siguiente (regla general #1 de Fase 6).
+
+**Entregables (resumen para el checklist de DoD cuando se implemente):**
+- Backend: migración `Notification` (nuevos choices, `read_at`, índice parcial); `ticket_service`;
+  `sse_service`; `notification_service` ampliado (canal in-app, eventos reject/cancel/complete,
+  pipeline `pending→processing→sent/failed`); sweep task Beat; endpoints
+  `GET /api/v1/notifications/`, `POST /notifications/{id}/read/`, `POST /notifications/read-all/`,
+  `POST /notifications/stream-ticket/`, `GET /notifications/stream/` (SSE); worker class `gthread`;
+  `nginx.conf` con bloque SSE dedicado.
+- Frontend: `NotificationBell` en Header con badge; `useNotifications` + `useNotificationStream`
+  (SSE con reconexión); `NotificationsPage`; toasts para eventos entrantes.
+- Tests: notificación in-app en cada evento de workflow (assigned/rejected/completed/cancelled);
+  `unread_count` correcto; aislamiento de tenant en lista, ticket y stream SSE; sweep re-encola
+  `processing` colgadas; no reenvía `sent`; ticket de un solo uso (segundo consumo falla);
+  `on_commit`.
+
+**Complejidad:** L. **Riesgo:** medio-alto — SSE detrás de Gunicorn sync + Nginx requiere el cambio
+de worker class (D0) y `proxy_buffering off` + timeouts largos (documentado arriba).
+
+#### Decisiones nuevas a registrar en CLAUDE.md §17 cuando se implemente (siguiente número secuencial tras #42)
+
+- Worker class `gthread` para soportar SSE sin ASGI/Channels (D0).
+- Auth de stream SSE por ticket efímero single-use en Redis, no por Bearer ni cookie (D1).
+- SSE es canal de nudge/invalidación, no de datos autoritativos; sin Last-Event-ID/replay (D2/D4).
+- Exactly-once estricto solo para in_app; email sigue best-effort/at-least-once (D3).
+- SSE es la 2ª excepción documentada al envelope `{data,meta}`, tras `/health/` (#24) (D8).
+
+Considerar ADR formal para D0 (cambio de worker class, decisión de infra con impacto transversal) y
+D1 (mecanismo de auth de SSE, no evidente) — ambas son decisiones no triviales que otro dev/agente
+podría cuestionar sin el contexto completo. **No se crea el ADR en esta sesión** (solo diseño, sin
+carpeta `ADR/` en el repo todavía); evaluar al implementar.
+
+> **Nota para la sesión que implemente esto:** todo lo anterior es diseño aprobado, no una decisión
+> cerrada de CLAUDE.md §17 todavía. Las decisiones D0–D8 se promueven a decisiones numeradas de
+> CLAUDE.md únicamente cuando el código exista (mismo criterio ya aplicado a 6.1/6.2). No hace falta
+> re-diseñar nada de lo anterior — solo ejecutar el plan de archivos y marcar el checklist de DoD.
 
 ---
 
